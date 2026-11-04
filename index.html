@@ -109,26 +109,35 @@
       </div>
     </div>
 
-    <!-- Preview / run -->
+    <!-- Run / preview (everything runs in a sandbox) -->
     <div id="preview" class="sheet" hidden>
       <header class="sheet-head">
-        <span id="preview-title" class="sheet-title">Preview</span>
+        <span id="preview-title" class="sheet-title">Run</span>
+        <span id="run-status" class="run-status"></span>
         <span class="spacer"></span>
+        <button class="icon-btn sm" id="run-stop" title="Stop" aria-label="Stop" hidden>
+          <svg viewBox="0 0 24 24" class="fill"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
         <button class="icon-btn sm" id="preview-console-btn" title="Toggle console" aria-label="Toggle console">
           <svg viewBox="0 0 24 24"><path d="M4 6l6 6-6 6M12 18h8"/></svg>
         </button>
-        <button class="icon-btn sm" id="preview-reload" title="Reload" aria-label="Reload">
+        <button class="icon-btn sm" id="preview-reload" title="Run again" aria-label="Run again">
           <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>
         </button>
         <button class="icon-btn sm" id="preview-close" title="Close" aria-label="Close">
           <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </header>
+      <div class="sandbox-note" id="sandbox-note"></div>
       <div class="preview-body">
-        <iframe id="preview-frame" title="Preview" sandbox="allow-scripts allow-modals allow-forms allow-popups"></iframe>
+        <div id="stage" class="stage"></div>
         <div id="console" class="console">
-          <div class="console-head"><span>Console</span><span class="spacer"></span><button class="link" id="console-clear">Clear</button></div>
-          <div id="console-out" class="console-out"></div>
+          <div class="console-head"><span>Output</span><span class="spacer"></span><button class="link" id="console-clear">Clear</button></div>
+          <pre id="console-out" class="console-out"></pre>
+          <div class="stdin-box">
+            <label for="stdin">Prepared input <span class="muted-inline">· optional, one line per input() / prompt()</span></label>
+            <textarea id="stdin" rows="1" placeholder="Python asks you live. JS prompt() reads from here." autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+          </div>
         </div>
       </div>
     </div>

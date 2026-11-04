@@ -54,4 +54,15 @@ monaco.editor.defineTheme('pocket-light', {
   },
 });
 
+// TypeScript: compile to CommonJS so programs can be run in the sandbox.
+const ts = monaco.typescript;
+ts.typescriptDefaults.setCompilerOptions({
+  ...ts.typescriptDefaults.getCompilerOptions(),
+  target: ts.ScriptTarget.ESNext,
+  module: ts.ModuleKind.CommonJS,
+  strict: true,
+  esModuleInterop: true,
+  allowNonTsExtensions: true,
+});
+
 export { monaco };

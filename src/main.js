@@ -4,6 +4,7 @@ import { monaco } from './monaco.js';
 import { FileSystem, normalize, dirname, basename, join, extname } from './fs.js';
 import { seed } from './seed.js';
 import { isNative, copyText, pasteText, saveFile, onBackButton, setSystemBarsTheme } from './platform.js';
+import { runProgram, showPage, stop as stopSandbox, clear as clearSandbox, sandboxHtml, loadPyodideFiles, sendInput } from './sandbox/index.js';
 
 // ---------------------------------------------------------------------------
 // Helpers & state
@@ -42,6 +43,8 @@ const settings = {
   tabSize: 2,
   lineNumbers: true,
   extraKeys: coarse,
+  sandboxNetwork: false,
+  timeLimit: 30,
   ...store.get('settings', {}),
 };
 
@@ -767,7 +770,8 @@ const commands = [
   { id: 'file.duplicate', title: 'File: Duplicate', when: hasModel, run: () => duplicate(activePath) },
   { id: 'file.delete', title: 'File: Delete', when: hasModel, run: () => deleteEntry(activePath) },
   { id: 'file.download', title: 'File: Download / Share Current File', when: hasModel, run: () => downloadFile(activePath) },
-  { id: 'run.preview', title: 'Run: Preview / Run Current File', key: 'F5', run: () => runPreview() },
+  { id: 'run.preview', title: 'Run: Run Current File in Sandbox', key: 'F5', run: () => runPreview() },
+  { id: 'run.stop', title: 'Run: Stop', key: 'Shift+F5', run: () => stopSandbox('user') },
   { id: 'view.explorer', title: 'View: Show Explorer', run: () => showView('explorer') },
   { id: 'view.search', title: 'View: Search in Files', key: 'Ctrl+Shift+F', run: () => showView('search') },
   { id: 'view.sidebar', title: 'View: Toggle Side Bar', key: 'Ctrl+B', run: () => setDrawer(!drawerOpen) },
@@ -811,7 +815,7 @@ addEventListener(
       f: mod && e.shiftKey ? 'view.search' : null,
       g: mod && !e.shiftKey ? 'editor.gotoLine' : null,
       ',': mod ? 'pref.settings' : null,
-      f5: 'run.preview',
+      f5: e.shiftKey ? 'run.stop' : 'run.preview',
       f1: 'palette.open',
       z: e.altKey && !mod ? 'pref.wrap' : null,
     };
@@ -850,6 +854,9 @@ function openSettings() {
     row('Line numbers', toggle('lineNumbers')),
     row('Minimap', toggle('minimap')),
     row('Extra keys bar', toggle('extraKeys')),
+    el('h3', { className: 'settings-group', textContent: 'Code sandbox' }),
+    row('Allow internet access', toggle('sandboxNetwork')),
+    row('Time limit', select('timeLimit', [[10, '10 seconds'], [30, '30 seconds'], [60, '1 minute'], [300, '5 minutes'], [0, 'No limit']], Number)),
     el('p', { className: 'muted', textContent: `Pocket Code ${__APP_VERSION__} · ${isNative ? 'Android app' : 'Web app'} · Editor: Monaco` }),
   );
   openDialog({ title: 'Settings', body, ok: 'Done', cancel: false });
@@ -957,25 +964,19 @@ function renderKeys() {
 }
 
 // ---------------------------------------------------------------------------
-// Run / preview
+// Run / preview — everything runs in a sandbox (see src/sandbox/index.js)
 // ---------------------------------------------------------------------------
 
-const CONSOLE_SHIM = `<script>(function(){
-  function fmt(a){
-    if (a instanceof Error) return a.stack || (a.name + ': ' + a.message);
-    if (typeof a === 'string') return a;
-    if (a === undefined) return 'undefined';
-    if (typeof a === 'function') return a.toString();
-    try { return JSON.stringify(a, null, 2); } catch (e) { return String(a); }
-  }
-  function send(type, args){ parent.postMessage({ __pocket: true, type: type, text: Array.prototype.map.call(args, fmt).join(' ') }, '*'); }
-  ['log','info','warn','error','debug'].forEach(function(k){
-    var orig = console[k];
-    console[k] = function(){ send(k, arguments); orig.apply(console, arguments); };
-  });
-  addEventListener('error', function(e){ send('error', [e.message + (e.lineno ? ' (line ' + e.lineno + ')' : '')]); });
-  addEventListener('unhandledrejection', function(e){ send('error', ['Uncaught (in promise) ' + fmt(e.reason)]); });
-})();<\/script>`;
+const RUNNERS = {
+  html: 'page', htm: 'page', md: 'page', svg: 'page',
+  js: 'js', cjs: 'js', mjs: 'js',
+  ts: 'ts', mts: 'ts', cts: 'ts',
+  py: 'python',
+};
+const RUNNER_NAMES = { js: 'JavaScript', ts: 'TypeScript', python: 'Python' };
+const stdinByPath = new Map(Object.entries(store.get('stdin', {})));
+
+const fileText = (path) => models.get(path)?.getValue() ?? fs.read(path);
 
 function buildHtml(path) {
   const dir = dirname(path);
@@ -983,10 +984,10 @@ function buildHtml(path) {
     if (/^([a-z]+:|\/\/|#)/i.test(ref)) return null;
     const clean = decodeURI(ref.split(/[?#]/)[0]);
     const e = fs.get(clean.startsWith('/') ? normalize(clean) : join(dir, clean));
-    return e?.type === 'file' ? (models.get(e.path)?.getValue() ?? e.content ?? '') : null;
+    return e?.type === 'file' ? fileText(e.path) : null;
   };
-  let html = models.get(path)?.getValue() ?? fs.read(path);
-  // Inline local <script src> and <link rel=stylesheet> so the preview works without a server.
+  let html = fileText(path);
+  // Inline local <script src> and <link rel=stylesheet> so the page works without a server.
   html = html.replace(/<script\b([^>]*?)\ssrc\s*=\s*["']([^"']+)["']([^>]*)>\s*<\/script>/gi, (m, a, src, b) => {
     const code = lookup(src);
     return code == null ? m : `<script${a}${b}>${code.replace(/<\/script/gi, '<\\/script')}\n</script>`;
@@ -997,55 +998,240 @@ function buildHtml(path) {
     const css = href && lookup(href[1]);
     return css == null ? m : `<style>${css}</style>`;
   });
-  return /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (h) => h + CONSOLE_SHIM) : CONSOLE_SHIM + html;
+  return html;
 }
 
-let previewPath = null;
-function runPreview(path = activePath) {
-  if (!path) return toast('Open an HTML or JavaScript file to run it');
-  const ext = extname(path);
-  let doc;
-  let jsOnly = false;
-  if (ext === 'html' || ext === 'htm') doc = buildHtml(path);
-  else if (['js', 'mjs', 'cjs'].includes(ext)) {
-    jsOnly = true;
-    const code = (models.get(path)?.getValue() ?? fs.read(path)).replace(/<\/script/gi, '<\\/script');
-    doc = `<!doctype html><html><head><meta charset="utf-8">${CONSOLE_SHIM}</head><body><script type="${ext === 'mjs' ? 'module' : 'text/javascript'}">${code}\n</script></body></html>`;
-  } else if (ext === 'svg') {
-    doc = `<!doctype html><body style="margin:0;display:grid;place-items:center;min-height:100vh">${fs.read(path)}</body>`;
-  } else if (ext === 'md') {
-    doc = `<!doctype html><meta charset="utf-8"><body style="font:15px/1.6 system-ui;padding:16px;max-width:720px;margin:auto">${renderMarkdown(models.get(path)?.getValue() ?? fs.read(path))}</body>`;
-  } else {
-    return toast('Run works for .html, .js, .md and .svg files');
+// --- Output console ---------------------------------------------------------
+
+let outputSize = 0;
+const MAX_OUTPUT = 300_000;
+
+function appendOutput(chunks) {
+  const out = $('#console-out');
+  const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
+  for (const [stream, text] of chunks) {
+    const cls = 'o-' + (['stdout', 'stderr', 'warn', 'info', 'stdin'].includes(stream) ? stream : 'stdout');
+    const field = out.querySelector('.live-input');
+    const last = field ? field.previousElementSibling : out.lastElementChild;
+    if (last && last.className === cls) last.textContent += text;
+    else out.insertBefore(el('span', { className: cls, textContent: text }), field);
+    outputSize += text.length;
+    if (stream === 'stderr') $('#preview').classList.add('show-console');
   }
+  while (outputSize > MAX_OUTPUT && out.firstElementChild) {
+    outputSize -= out.firstElementChild.textContent.length;
+    out.firstElementChild.remove();
+  }
+  if (atBottom) out.scrollTop = out.scrollHeight;
+}
+const info = (text) => appendOutput([['info', text + '\n']]);
+
+/** Shows a text box at the end of the output for a program waiting on input(). */
+function askInput() {
+  setRunStatus('Waiting for input', 'running');
+  const field = el('input', { className: 'live-input', type: 'text', autocomplete: 'off', spellcheck: false, enterKeyHint: 'send' });
+  field.setAttribute('autocapitalize', 'off');
+  field.setAttribute('aria-label', 'Program input');
+  field.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const text = field.value;
+    field.remove();
+    setRunStatus('Running…', 'running');
+    sendInput(text);
+  });
+  const out = $('#console-out');
+  out.append(field);
+  out.scrollTop = out.scrollHeight;
+  field.focus();
+}
+function clearOutput() {
+  $('#console-out').replaceChildren();
+  outputSize = 0;
+}
+
+function setRunStatus(text, kind = '') {
+  const s = $('#run-status');
+  s.textContent = text;
+  s.className = 'run-status ' + kind;
+  const running = kind === 'running';
+  $('#run-stop').hidden = !running;
+  $('#preview-reload').hidden = running;
+}
+
+function sandboxNote() {
+  const parts = ['🔒 Sandboxed', 'no access to your files', settings.sandboxNetwork ? 'internet ON' : 'offline'];
+  if (settings.timeLimit) parts.push(`${settings.timeLimit}s limit`);
+  $('#sandbox-note').textContent = parts.join(' · ');
+  $('#sandbox-note').title = "Code runs in an isolated sandbox: it can't read or change your files, the app, or your phone. Change internet access and the time limit in Settings.";
+}
+
+function openRunSheet(path, mode) {
   previewPath = path;
   $('#preview-title').textContent = basename(path);
-  $('#console-out').replaceChildren();
-  $('#preview').classList.toggle('js-only', jsOnly);
+  $('#preview').classList.toggle('program', mode === 'program');
+  $('#preview').classList.remove('show-console');
   $('#preview').hidden = false;
-  if (jsOnly) logLine('info', `▶ Running ${basename(path)}`);
-  $('#preview-frame').srcdoc = doc;
+  $('#stdin').value = stdinByPath.get(path) ?? '';
+  sandboxNote();
+  clearOutput();
 }
 
-function logLine(type, text) {
-  const out = $('#console-out');
-  out.append(el('div', { className: 'log ' + type, textContent: text }));
-  out.scrollTop = out.scrollHeight;
-  if (type === 'error') $('#preview').classList.add('show-console');
+// --- TypeScript -------------------------------------------------------------
+
+function flattenMessage(m) {
+  if (typeof m === 'string') return m;
+  return [m.messageText, ...(m.next || []).map(flattenMessage)].join(' ');
 }
 
-addEventListener('message', (e) => {
-  if (e.source !== $('#preview-frame').contentWindow || !e.data?.__pocket) return;
-  logLine(e.data.type, e.data.text);
-});
-$('#preview-close').addEventListener('click', () => closePreview());
-$('#preview-reload').addEventListener('click', () => previewPath && runPreview(previewPath));
-$('#preview-console-btn').addEventListener('click', () => $('#preview').classList.toggle('show-console'));
-$('#console-clear').addEventListener('click', () => $('#console-out').replaceChildren());
+async function compileTypeScript(path, { javascript = false } = {}) {
+  const model = getModel(path);
+  const uri = model.uri.toString();
+  const getWorker = javascript ? monaco.typescript.getJavaScriptWorker : monaco.typescript.getTypeScriptWorker;
+  const client = await (await getWorker())(model.uri);
+  const [output, syntax, semantic] = await Promise.all([
+    client.getEmitOutput(uri),
+    client.getSyntacticDiagnostics(uri),
+    client.getSemanticDiagnostics(uri),
+  ]);
+  const describe = (d) => {
+    const pos = model.getPositionAt(d.start ?? 0);
+    const label = javascript ? 'SyntaxError' : `TS${d.code}`;
+    return `${basename(path)}:${pos.lineNumber}:${pos.column} ${label}: ${flattenMessage(d.messageText)}`;
+  };
+  return {
+    js: output.outputFiles.find((f) => /\.[cm]?js$/.test(f.name))?.text ?? '',
+    syntaxErrors: syntax.map(describe),
+    typeErrors: semantic.filter((d) => d.category === 1).map(describe),
+  };
+}
+
+// --- Running ----------------------------------------------------------------
+
+let previewPath = null;
+let runToken = 0; // bumped on every run/close so a slow, outdated run start can bail out
+
+async function runPreview(path = activePath) {
+  if (!path) return toast('Open a file to run it');
+  const runner = RUNNERS[extname(path)];
+  if (!runner) return toast('Run works for Python, JavaScript, TypeScript, HTML, Markdown and SVG files');
+  const token = ++runToken;
+  await flushSaves();
+  if (token !== runToken) return;
+
+  if (runner === 'page') {
+    openRunSheet(path, 'page');
+    const ext = extname(path);
+    let html;
+    if (ext === 'md') html = `<!doctype html><meta charset="utf-8"><body style="font:15px/1.6 system-ui;padding:16px;max-width:720px;margin:auto">${renderMarkdown(fileText(path))}</body>`;
+    else if (ext === 'svg') html = `<!doctype html><body style="margin:0;display:grid;place-items:center;min-height:100vh">${fileText(path)}</body>`;
+    else html = buildHtml(path);
+    setRunStatus('');
+    $('#run-stop').hidden = true;
+    showPage($('#stage'), sandboxHtml(html, settings.sandboxNetwork), { onOutput: appendOutput });
+    return;
+  }
+
+  openRunSheet(path, 'program');
+  const name = RUNNER_NAMES[runner];
+  setRunStatus('Preparing…', 'running');
+  info(`▶ ${name} · ${basename(path)}`);
+  const job = {
+    lang: runner === 'python' ? 'python' : 'js',
+    code: fileText(path),
+    fileName: basename(path),
+    path,
+    module: extname(path) === 'mjs',
+    stdin: $('#stdin').value,
+    network: settings.sandboxNetwork,
+  };
+
+  try {
+    if (runner === 'ts') {
+      setRunStatus('Compiling…', 'running');
+      const { js, syntaxErrors, typeErrors } = await compileTypeScript(path);
+      if (token !== runToken) return;
+      if (syntaxErrors.length) {
+        appendOutput([['stderr', syntaxErrors.join('\n') + '\n']]);
+        return setRunStatus('Syntax error', 'error');
+      }
+      if (typeErrors.length) {
+        appendOutput([['warn', `${typeErrors.length} type error${typeErrors.length > 1 ? 's' : ''} (running anyway):\n${typeErrors.join('\n')}\n`]]);
+      }
+      job.code = js;
+    }
+    if (runner === 'js') {
+      // Catch syntax errors up front so they come with a line number.
+      const { syntaxErrors } = await compileTypeScript(path, { javascript: true });
+      if (token !== runToken) return;
+      if (syntaxErrors.length) {
+        appendOutput([['stderr', syntaxErrors.join('\n') + '\n']]);
+        return setRunStatus('Syntax error', 'error');
+      }
+    }
+    if (runner === 'python') {
+      setRunStatus('Loading Python…', 'running');
+      job.pyodide = await loadPyodideFiles();
+      job.files = Object.fromEntries(fs.files().map((f) => [f.path, fileText(f.path)]));
+    }
+  } catch (err) {
+    appendOutput([['stderr', (err?.message || String(err)) + '\n']]);
+    return setRunStatus('Failed', 'error');
+  }
+  if (token !== runToken) return; // closed or replaced meanwhile
+
+  runProgram($('#stage'), job, {
+    timeLimit: settings.timeLimit,
+    onOutput: appendOutput,
+    onClear: clearOutput,
+    onInput: askInput,
+    onStatus: (text) => setRunStatus(text, 'running'),
+    onDone: ({ ok, stopped, ms }) => {
+      document.querySelectorAll('.live-input').forEach((f) => f.remove());
+      const secs = ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;
+      if (stopped === 'timeout') {
+        info(`■ Stopped: hit the ${settings.timeLimit}s time limit (change it in Settings)`);
+        setRunStatus('Time limit', 'error');
+      } else if (stopped === 'user') {
+        info('■ Stopped');
+        setRunStatus('Stopped', 'error');
+      } else if (stopped) {
+        // replaced by another run or closed: nothing to report
+      } else if (ok) {
+        info(`✓ Finished in ${secs}`);
+        setRunStatus('Finished', 'ok');
+      } else {
+        const text = $('#console-out').textContent;
+        if (runner === 'python' && /EOFError/.test(text)) {
+          info('Tip: type answers for input() in the Prepared input box (one per line), then tap Run again.');
+        }
+        if (runner !== 'python' && /\b(document|window) is not defined/.test(text)) {
+          info('Tip: JS/TS files run as programs without a web page. To use document or window, run an HTML file that loads your script.');
+        }
+        setRunStatus('Error', 'error');
+      }
+    },
+  });
+}
+
 function closePreview() {
+  runToken++;
+  clearSandbox($('#stage'));
+  setRunStatus('');
   $('#preview').hidden = true;
-  $('#preview-frame').srcdoc = '';
+  previewPath = null;
 }
+
+$('#stdin').addEventListener('input', () => {
+  if (!previewPath) return;
+  stdinByPath.set(previewPath, $('#stdin').value);
+  store.set('stdin', Object.fromEntries(stdinByPath));
+});
+$('#run-stop').addEventListener('click', () => stopSandbox('user'));
+$('#preview-close').addEventListener('click', () => closePreview());
+$('#preview-reload').addEventListener('click', () => previewPath && run(() => runPreview(previewPath)));
+$('#preview-console-btn').addEventListener('click', () => $('#preview').classList.toggle('show-console'));
+$('#console-clear').addEventListener('click', clearOutput);
 
 // Very small Markdown renderer for previews (headings, lists, code, emphasis, links).
 function renderMarkdown(src) {
