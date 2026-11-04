@@ -7,10 +7,11 @@ It's an independent project and isn't affiliated with Microsoft or Visual Studio
 ## Features
 
 - **The VS Code editor engine:** syntax highlighting for 80+ languages, IntelliSense and error checking for JS/TS/JSON/CSS/HTML, multi-cursor, find & replace, code folding, bracket colors, format document, and rename symbol.
+- **Python IntelliSense** powered by [Jedi](https://github.com/davidhalter/jedi), running offline on the bundled Python: completions as you type (including names from your own `.py` files), parameter hints, hover docs, and syntax error squiggles. Jedi only analyzes your code; it never runs it. The first suggestion after opening a `.py` file takes a few seconds while it starts.
 - **Explorer side bar:** a file and folder tree. Long-press or tap ⋯ on an item to create, rename, duplicate, delete, or share it.
 - **Tabs, Go to File (Ctrl+P), and Command Palette (Ctrl+Shift+P),** with fuzzy search.
 - **Search across all files.**
-- **Extra keys bar** above the on-screen keyboard with Tab, arrows, a select mode (⇧), brackets and symbols, undo/redo, copy/cut/paste, comment, find, and format. Hold an arrow to repeat it.
+- **Extra keys bar** above the on-screen keyboard with Tab (accepts the highlighted suggestion, otherwise indents), arrows, a select mode (⇧), brackets and symbols, undo/redo, copy/cut/paste, comment, find, and format. Hold an arrow to repeat it.
 - **Run ▶ in a sandbox:** run **Python**, **JavaScript** and **TypeScript** programs, and preview **HTML**, Markdown and SVG. See [Running code](#running-code) below.
 - **Autosave:** files are stored on the device (IndexedDB) and your open tabs come back when you reopen the app.
 - **Import/export:** open files or a whole `.zip` project from your phone, and export the workspace as a `.zip` through the Android share sheet.
@@ -84,7 +85,9 @@ Open the printed network URL in Chrome on your phone. The production build (`npm
 index.html            App shell (side bar, tabs, editor, keys bar, status bar, overlays)
 src/main.js           App logic: tabs, explorer, palette, commands, search, run panel, import/export
 src/sandbox/          Code sandbox: isolated iframe + worker runtime for JS/TS/Python
-scripts/              Build helper that bundles the Python runtime
+src/python/           Python IntelliSense (Jedi in a background worker)
+scripts/              Build helper that bundles the Python runtime and downloads the Jedi/parso
+                      wheels from PyPI (checked against pinned SHA-256 hashes)
 src/monaco.js         Monaco setup, language workers, themes
 src/fs.js             Virtual file system on IndexedDB
 src/platform.js       Native bridges (clipboard, share/save, back button, system bars)

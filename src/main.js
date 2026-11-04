@@ -4,6 +4,7 @@ import { monaco } from './monaco.js';
 import { FileSystem, normalize, dirname, basename, join, extname } from './fs.js';
 import { seed } from './seed.js';
 import { isNative, copyText, pasteText, saveFile, onBackButton, setSystemBarsTheme } from './platform.js';
+import { setupPythonIntellisense, pythonFilesChanged } from './python/intellisense.js';
 import { runProgram, showPage, stop as stopSandbox, clear as clearSandbox, sandboxHtml, loadPyodideFiles, sendInput } from './sandbox/index.js';
 
 // ---------------------------------------------------------------------------
@@ -234,6 +235,7 @@ async function saveNow(path) {
   pendingSaves.delete(path);
   if (model && !model.isDisposed() && fs.get(path)?.type === 'file') {
     await fs.write(path, model.getValue(), { silent: true }).catch((e) => toast('Save failed: ' + e.message));
+    if (path.endsWith('.py')) pythonFilesChanged();
   }
   setSaveStatus();
   renderTabs();
@@ -484,6 +486,7 @@ async function deleteEntry(path) {
 }
 
 fs.addEventListener('change', ({ detail }) => {
+  pythonFilesChanged();
   if (detail.type === 'remove' || detail.type === 'clear') {
     const gone = new Set(detail.type === 'clear' ? [...openTabs, ...models.keys(), ...expanded] : detail.paths);
     const activeGone = activePath && gone.has(activePath);
@@ -926,6 +929,12 @@ async function pressKey(k, btn) {
     if (text == null) return toast('Clipboard is not available');
     editor.trigger('keys', 'paste', { text });
     return;
+  }
+  if (k.cmd === 'tab') {
+    // Like a real Tab key: accept the highlighted suggestion or jump to the next snippet field.
+    if (document.querySelector('.monaco-editor .suggest-widget.visible')) return editor.trigger('keys', 'acceptSelectedSuggestion', {});
+    const snippets = editor.getContribution('snippetController2');
+    if (snippets?.isInSnippet?.()) return snippets.next();
   }
   const isArrow = /^cursor(Left|Right|Up|Down|Home|End)$/.test(k.cmd);
   editor.trigger('keys', isArrow && shiftMode ? k.cmd + 'Select' : k.cmd, null);
@@ -1393,6 +1402,9 @@ addEventListener('keydown', (e) => {
 
 async function boot() {
   await fs.init(seed);
+  setupPythonIntellisense({
+    getFiles: () => Object.fromEntries(fs.files().filter((f) => f.path.endsWith('.py')).map((f) => [f.path, fileText(f.path)])),
+  });
   renderKeys();
   applySettings();
   setDrawer(drawerOpen);
