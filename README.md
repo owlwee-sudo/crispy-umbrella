@@ -30,6 +30,15 @@ Tap ▶ (or press F5) to run the current file.
 | `.html` | Opens as a live page with your local CSS/JS files inlined, plus a console. |
 | `.md` `.svg` | Preview. |
 
+### Python packages (pip)
+
+Open the Command Palette (⋯) and type a pip command, just like in a terminal: `pip install numpy`, `pip3 install pandas matplotlib`, `pip install -r requirements.txt`, `pip uninstall emoji` or `pip list`. You can also use **pip: Install Python Packages…** or **Settings → Python → Packages**.
+
+- Packages download once (internet needed), then stay cached on the phone, so they keep working offline. Installs are pinned to the exact version you got.
+- Installs work for pure-Python packages from PyPI, plus the packages Pyodide has built for WebAssembly: numpy, pandas, scipy, scikit-learn, matplotlib, sympy, pillow, opencv-python, networkx, statsmodels, xgboost, lightgbm and [hundreds more](https://pyodide.org/en/stable/usage/packages-in-pyodide.html).
+- **PyTorch, TensorFlow and JAX can't be installed.** They need native code that has never been built for WebAssembly, the Python engine this app uses. For machine learning, use scikit-learn, xgboost or lightgbm, or write neural nets with numpy.
+- Your code still can't use the internet. The *app* downloads package files on its behalf, and only from `pypi.org`, `files.pythonhosted.org` and the Pyodide CDN. Pyodide packages are checked against the SHA-256 hashes in `pyodide-lock.json`.
+
 ### The sandbox
 
 Every run starts in a brand-new isolated sandbox that's thrown away afterwards:
@@ -85,9 +94,9 @@ Open the printed network URL in Chrome on your phone. The production build (`npm
 index.html            App shell (side bar, tabs, editor, keys bar, status bar, overlays)
 src/main.js           App logic: tabs, explorer, palette, commands, search, run panel, import/export
 src/sandbox/          Code sandbox: isolated iframe + worker runtime for JS/TS/Python
-src/python/           Python IntelliSense (Jedi in a background worker)
-scripts/              Build helper that bundles the Python runtime and downloads the Jedi/parso
-                      wheels from PyPI (checked against pinned SHA-256 hashes)
+src/python/           Python IntelliSense (Jedi in a background worker) and pip package manager
+scripts/              Build helper that bundles the Python runtime and downloads the Jedi, parso,
+                      micropip and packaging wheels from PyPI (checked against pinned SHA-256 hashes)
 src/monaco.js         Monaco setup, language workers, themes
 src/fs.js             Virtual file system on IndexedDB
 src/platform.js       Native bridges (clipboard, share/save, back button, system bars)

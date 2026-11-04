@@ -5,6 +5,7 @@ import { FileSystem, normalize, dirname, basename, join, extname } from './fs.js
 import { seed } from './seed.js';
 import { isNative, copyText, pasteText, saveFile, onBackButton, setSystemBarsTheme } from './platform.js';
 import { setupPythonIntellisense, pythonFilesChanged } from './python/intellisense.js';
+import * as pip from './python/packages.js';
 import { runProgram, showPage, stop as stopSandbox, clear as clearSandbox, sandboxHtml, loadPyodideFiles, sendInput } from './sandbox/index.js';
 
 // ---------------------------------------------------------------------------
@@ -641,6 +642,10 @@ const closePalette = () => {
 };
 
 function mainPaletteSource(raw) {
+  if (/^\s*(pip3?|python3?\s+-m\s+pip)(\s|$)/i.test(raw)) {
+    const cmd = raw.trim();
+    return [{ label: `Run: ${cmd}`, detail: 'Enter ↵', run: () => pipCommand(cmd) }];
+  }
   if (raw.startsWith('>')) {
     const q = raw.slice(1).trim();
     return commands
@@ -794,6 +799,9 @@ const commands = [
   { id: 'pref.keys', title: 'View: Toggle Extra Keys Bar', run: () => ((settings.extraKeys = !settings.extraKeys), applySettings()) },
   { id: 'pref.zoomIn', title: 'View: Increase Font Size', run: () => ((settings.fontSize = Math.min(32, settings.fontSize + 1)), applySettings()) },
   { id: 'pref.zoomOut', title: 'View: Decrease Font Size', run: () => ((settings.fontSize = Math.max(8, settings.fontSize - 1)), applySettings()) },
+  { id: 'pip.install', title: 'pip: Install Python Packages…', run: () => askPipInstall() },
+  { id: 'pip.requirements', title: 'pip: Install from requirements.txt', when: () => fs.files().some((f) => basename(f.path) === 'requirements.txt'), run: () => pipCommand('install -r ' + fs.files().find((f) => basename(f.path) === 'requirements.txt').path) },
+  { id: 'pip.manage', title: 'pip: List / Uninstall Packages', run: () => managePackages() },
   { id: 'workspace.import', title: 'Workspace: Import Files or .zip…', run: () => importFiles('/') },
   { id: 'workspace.export', title: 'Workspace: Export as .zip', run: () => exportWorkspace() },
   { id: 'workspace.reset', title: 'Workspace: Reset to Sample Project', run: () => resetWorkspace() },
@@ -857,6 +865,16 @@ function openSettings() {
     row('Line numbers', toggle('lineNumbers')),
     row('Minimap', toggle('minimap')),
     row('Extra keys bar', toggle('extraKeys')),
+    el('h3', { className: 'settings-group', textContent: 'Python' }),
+    row(
+      'Packages (pip)',
+      el('button', {
+        className: 'btn ghost sm',
+        type: 'button',
+        textContent: `Manage (${pip.pinnedRequirements().length})`,
+        onclick: () => (closeDialog(false), run(managePackages)),
+      }),
+    ),
     el('h3', { className: 'settings-group', textContent: 'Code sandbox' }),
     row('Allow internet access', toggle('sandboxNetwork')),
     row('Time limit', select('timeLimit', [[10, '10 seconds'], [30, '30 seconds'], [60, '1 minute'], [300, '5 minutes'], [0, 'No limit']], Number)),
@@ -1075,10 +1093,11 @@ function sandboxNote() {
   $('#sandbox-note').title = "Code runs in an isolated sandbox: it can't read or change your files, the app, or your phone. Change internet access and the time limit in Settings.";
 }
 
-function openRunSheet(path, mode) {
+function openRunSheet(path, mode, title = basename(path)) {
   previewPath = path;
-  $('#preview-title').textContent = basename(path);
-  $('#preview').classList.toggle('program', mode === 'program');
+  $('#preview-title').textContent = title;
+  $('#preview').classList.toggle('program', mode === 'program' || mode === 'pip');
+  $('#preview').classList.toggle('pip', mode === 'pip');
   $('#preview').classList.remove('show-console');
   $('#preview').hidden = false;
   $('#stdin').value = stdinByPath.get(path) ?? '';
@@ -1181,6 +1200,8 @@ async function runPreview(path = activePath) {
     if (runner === 'python') {
       setRunStatus('Loading Python…', 'running');
       job.pyodide = await loadPyodideFiles();
+      pip.setLockfile(job.pyodide.lock);
+      job.packages = pip.pinnedRequirements();
       job.files = Object.fromEntries(fs.files().map((f) => [f.path, fileText(f.path)]));
     }
   } catch (err) {
@@ -1194,6 +1215,7 @@ async function runPreview(path = activePath) {
     onOutput: appendOutput,
     onClear: clearOutput,
     onInput: askInput,
+    onPackageFetch: (req) => pip.fetchPackageForSandbox(req, { allowDownload: settings.sandboxNetwork }),
     onStatus: (text) => setRunStatus(text, 'running'),
     onDone: ({ ok, stopped, ms }) => {
       document.querySelectorAll('.live-input').forEach((f) => f.remove());
@@ -1238,9 +1260,123 @@ $('#stdin').addEventListener('input', () => {
 });
 $('#run-stop').addEventListener('click', () => stopSandbox('user'));
 $('#preview-close').addEventListener('click', () => closePreview());
-$('#preview-reload').addEventListener('click', () => previewPath && run(() => runPreview(previewPath)));
+$('#preview-reload').addEventListener('click', () => {
+  if (previewPath === PIP_PATH) run(() => pipCommand(lastPipCommand));
+  else if (previewPath) run(() => runPreview(previewPath));
+});
 $('#preview-console-btn').addEventListener('click', () => $('#preview').classList.toggle('show-console'));
 $('#console-clear').addEventListener('click', clearOutput);
+
+// ---------------------------------------------------------------------------
+// pip: install Python packages (downloaded once, then cached on the phone)
+// ---------------------------------------------------------------------------
+
+const PIP_PATH = '/.pip';
+let lastPipCommand = '';
+
+function readWorkspaceFile(name) {
+  const candidates = [name.startsWith('/') ? name : join(activePath ? dirname(activePath) : '/', name), join('/', name)];
+  const hit = candidates.map(normalize).find((p) => fs.get(p)?.type === 'file');
+  if (!hit) throw new Error(`pip: can't find ${name} in your workspace`);
+  return fileText(hit);
+}
+
+async function pipCommand(text) {
+  const { command, args } = pip.parsePipCommand(text, readWorkspaceFile);
+  if (command === 'list' || command === 'freeze') return managePackages();
+  if (command === 'uninstall' || command === 'remove') {
+    if (!args.length) throw new Error('pip uninstall: which package? e.g. pip uninstall numpy');
+    const removed = args.filter((a) => pip.uninstall(a.split(/[<>=!~\[; ]/)[0]));
+    return toast(removed.length ? `Uninstalled ${removed.join(', ')}` : `Not installed: ${args.join(', ')}`);
+  }
+  if (command !== 'install') throw new Error(`pip ${command} isn't supported here. Try: install, uninstall, list`);
+  if (!args.length) throw new Error('pip install: which package? e.g. pip install numpy');
+
+  lastPipCommand = text;
+  const token = ++runToken;
+  openRunSheet(PIP_PATH, 'pip', 'pip install');
+  $('#sandbox-note').textContent = '📦 Downloads from PyPI / Pyodide, then saved on this phone for offline use';
+  info(`$ pip install ${args.join(' ')}`);
+  setRunStatus('Loading Python…', 'running');
+  const rt = await loadPyodideFiles();
+  if (token !== runToken) return;
+  pip.setLockfile(rt.lock);
+  runProgram(
+    $('#stage'),
+    { lang: 'pip', requirements: args, pyodide: rt, network: false, path: PIP_PATH, fileName: 'pip', code: '', stdin: '' },
+    {
+      timeLimit: 0,
+      onOutput: appendOutput,
+      onStatus: (t) => setRunStatus(t, 'running'),
+      onPackageFetch: async (req) => {
+        const reply = await pip.fetchPackageForSandbox(req, { allowDownload: true });
+        if (reply.error && token === runToken) info(`⚠ ${reply.error}`);
+        return reply;
+      },
+      onPipResult: (pinned) => pip.recordInstalled(pinned),
+      onDone: ({ ok, stopped }) => {
+        if (stopped === 'user') return info('■ Stopped'), setRunStatus('Stopped', 'error');
+        if (stopped) return;
+        if (ok) {
+          info('✓ Done. Installed packages are saved on this phone and work offline.');
+          setRunStatus('Installed', 'ok');
+        } else setRunStatus('Error', 'error');
+      },
+    },
+  );
+}
+
+async function askPipInstall() {
+  const text = await ask('pip install', '', { placeholder: 'numpy pandas requests==2.32.3', ok: 'Install', selectStem: false });
+  if (text) await pipCommand(/^(pip3?|python)/i.test(text) ? text : 'install ' + text);
+}
+
+async function managePackages() {
+  const render = async () => {
+    const pkgs = Object.values(pip.installedPackages()).sort();
+    const size = await pip.cacheSize().catch(() => 0);
+    const list = el(
+      'div',
+      { className: 'pkg-list' },
+      ...(pkgs.length
+        ? pkgs.map((spec) =>
+            el(
+              'div',
+              { className: 'pkg' },
+              el('span', { className: 'pkg-name', textContent: spec.replace('==', ' ') }),
+              el('button', {
+                className: 'link danger',
+                textContent: 'Uninstall',
+                type: 'button',
+                onclick: async () => {
+                  pip.uninstall(spec.split('==')[0]);
+                  body.replaceWith((body = await render()));
+                },
+              }),
+            ),
+          )
+        : [el('p', { className: 'muted', textContent: 'No packages installed yet. Python’s standard library is always available.' })]),
+    );
+    const actions = el(
+      'div',
+      { className: 'pkg-actions' },
+      el('button', { className: 'btn', type: 'button', textContent: 'pip install…', onclick: () => (closeDialog(false), run(askPipInstall)) }),
+      el('button', {
+        className: 'btn ghost',
+        type: 'button',
+        textContent: `Clear downloads (${(size / 1048576).toFixed(1)} MB)`,
+        onclick: async () => {
+          await pip.clearCache();
+          toast('Download cache cleared. Installed packages will download again next time you run them online.');
+          body.replaceWith((body = await render()));
+        },
+      }),
+    );
+    return el('div', {}, list, actions);
+  };
+  let body = await render();
+  await openDialog({ title: 'Python packages', body, ok: 'Done', cancel: false });
+}
 
 // Very small Markdown renderer for previews (headings, lists, code, emphasis, links).
 function renderMarkdown(src) {

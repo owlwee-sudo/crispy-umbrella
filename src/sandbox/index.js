@@ -71,7 +71,9 @@ const HOST_PAGE = (network) => `<!doctype html><html><head><meta charset="utf-8"
     w.postMessage(e.data.job);
   });
   addEventListener('message', function (e) {
-    if (e.source === parent && started && e.data && e.data.type === 'input-reply') worker().postMessage(e.data);
+    if (e.source !== parent || !started || !e.data) return;
+    if (e.data.type === 'input-reply') worker().postMessage(e.data);
+    if (e.data.type === 'pkg-reply') worker().postMessage(e.data, e.data.body ? [e.data.body] : []);
   });
   parent.postMessage({ type: 'ready' }, '*');
 })();
@@ -87,6 +89,15 @@ function attach(frame, handlers) {
     if (m.type === 'ready' && handlers.job) frame.contentWindow.postMessage({ source: workerSource, job: handlers.job }, '*');
     else if (m.type === 'out' && Array.isArray(m.chunks)) handlers.onOutput?.(m.chunks);
     else if (m.type === 'clear') handlers.onClear?.();
+    else if (m.type === 'pkg-fetch') {
+      Promise.resolve(handlers.onPackageFetch ? handlers.onPackageFetch(m) : { error: 'Packages are not available' })
+        .catch((err) => ({ error: String(err?.message || err) }))
+        .then((reply) => {
+          if (current !== run) return;
+          const msg = { type: 'pkg-reply', reqId: m.reqId, ...reply };
+          frame.contentWindow?.postMessage(msg, '*', msg.body ? [msg.body] : []);
+        });
+    } else if (m.type === 'pip-result') handlers.onPipResult?.(m.pinned || {});
     else if (m.type === 'input') {
       pauseTimer(run);
       handlers.onInput?.();
@@ -156,14 +167,14 @@ export const isRunning = () => !!current && !!current.handlers.job && !current.f
  * Runs a JS/TS/Python job in a fresh sandbox.
  * job: { lang: 'js' | 'python', code, fileName, path, module?, stdin, network, files?, pyodide? }
  */
-export function runProgram(container, job, { timeLimit, onOutput, onStatus, onClear, onInput, onDone }) {
+export function runProgram(container, job, { timeLimit, onOutput, onStatus, onClear, onInput, onDone, onPackageFetch, onPipResult }) {
   stop('replaced');
   const frame = document.createElement('iframe');
   frame.className = 'sandbox-frame';
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.setAttribute('aria-hidden', 'true');
   frame.srcdoc = HOST_PAGE(job.network);
-  attach(frame, { job, timeLimit, onOutput, onStatus, onClear, onInput, onDone });
+  attach(frame, { job, timeLimit, onOutput, onStatus, onClear, onInput, onDone, onPackageFetch, onPipResult });
   container.append(frame);
 }
 
@@ -203,8 +214,10 @@ export function loadPyodideFiles() {
       get('python_stdlib.zip'),
       get('pyodide-lock.json', 'text'),
     ]);
-    const version = JSON.parse(lock).info?.version;
-    return { loader, asm, wasm, stdlib, lock, cdn: `https://cdn.jsdelivr.net/pyodide/v${version}/full/` };
+    const manifest = await fetch(new URL('wheels.json', base)).then((r) => r.json()).catch(() => ({}));
+    const version = manifest.pyodideVersion;
+    const micropip = await Promise.all((manifest.micropip || []).map(async (name) => ({ name, data: await get(name) })));
+    return { loader, asm, wasm, stdlib, lock, micropip, cdn: `https://cdn.jsdelivr.net/pyodide/v${version}/full/` };
   })();
   pyodideFiles.catch(() => (pyodideFiles = null));
   return pyodideFiles;

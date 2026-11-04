@@ -73,11 +73,12 @@ let ready = null;
 
 async function init({ indexURL }) {
   const { loadPyodide } = await import(/* @vite-ignore */ indexURL + 'pyodide.mjs');
-  const manifest = await (await fetch(indexURL + 'intellisense.json')).json();
-  if (!manifest.wheels?.length) throw new Error('Python autocomplete files are not bundled');
+  const manifest = await (await fetch(indexURL + 'wheels.json')).json();
+  const wheels = manifest.jedi || [];
+  if (wheels.length < 2) throw new Error('Python autocomplete files are not bundled');
   py = await loadPyodide({ indexURL, packageBaseUrl: indexURL });
   const site = py.runPython('import site; site.getsitepackages()[0]');
-  for (const wheel of manifest.wheels) {
+  for (const wheel of wheels) {
     const buf = await (await fetch(indexURL + wheel)).arrayBuffer();
     py.unpackArchive(buf, 'wheel', { extractDir: site });
   }

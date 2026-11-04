@@ -1022,6 +1022,36 @@ body.has-file:not(.no-keys) .keys {
   font: inherit;
   outline: none;
 }
+.pip .stdin-box {
+  display: none !important;
+}
+.pkg-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 45vh;
+  overflow: auto;
+}
+.pkg {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  border-bottom: 1px solid var(--border);
+  font: 13px/1.4 ui-monospace, 'Roboto Mono', monospace;
+}
+.pkg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.link.danger {
+  color: var(--danger);
+}
+.btn.sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
 .settings-group {
   margin: 18px 0 2px;
   font-size: 11px;

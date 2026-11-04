@@ -185,6 +185,36 @@ async function runJs(job) {
 // --- Python (Pyodide) ----------------------------------------------------------------------------
 
 const PY_BASE = 'https://pyodide.sandbox/';
+const PACKAGE_HOSTS = /^https:\/\/(pypi\.org|files\.pythonhosted\.org)\//;
+
+// Package downloads (pip) don't go to the network from here: the app fetches them for us from
+// PyPI / the Pyodide CDN, caches them on the device, and passes the bytes in. That way your code
+// stays offline while installed packages still work, even without internet.
+let pkgSeq = 0;
+const pkgWaiters = new Map();
+function fetchPackage(url, accept) {
+  return new Promise((resolve, reject) => {
+    const reqId = ++pkgSeq;
+    pkgWaiters.set(reqId, { resolve, reject });
+    postMessage({ type: 'pkg-fetch', reqId, url, accept });
+  });
+}
+function onPackageReply(data) {
+  const waiter = pkgWaiters.get(data.reqId);
+  if (!waiter) return;
+  pkgWaiters.delete(data.reqId);
+  if (data.error) waiter.reject(new Error(data.error));
+  else waiter.resolve(new Response(data.body, { status: data.status, headers: { 'Content-Type': data.contentType || 'application/octet-stream' } }));
+}
+
+function missingModuleHint(text) {
+  // Pyodide's own advice mentions micropip; point to the app's pip instead.
+  let out = text.replace(/\nThe module '([^']+)' is included in the Pyodide distribution[\s\S]*$/, (_, name) => `\n(Install it with pip: Command Palette → "pip install ${name}")`);
+  if (out === text) {
+    out = text.replace(/(ModuleNotFoundError: No module named '([^'.]+)[^\n]*)\s*$/, (line, _m, name) => `${line}\n(If '${name}' is a package from PyPI, install it with pip: Command Palette → "pip install ${name}")`);
+  }
+  return out;
+}
 
 function cleanTraceback(text, job) {
   // Hide Pyodide's own frames so the traceback points at the user's code.
@@ -198,17 +228,10 @@ function cleanTraceback(text, job) {
     }
     out.push(lines[i]);
   }
-  let result = out.join('\n');
-  // Replace Pyodide's micropip advice for missing packages with a hint that fits the app.
-  result = result.replace(/\nThe module '([^']+)' is included in the Pyodide distribution[\s\S]*$/, (_, name) =>
-    job.network
-      ? `\n(Couldn't download '${name}'. Check your internet connection.)`
-      : `\n('${name}' isn't bundled with the app. Allow internet access for the sandbox in Settings to download it.)`,
-  );
-  return result.replaceAll(`"/home/pyodide/${job.path.replace(/^\//, '')}"`, `"${job.fileName}"`);
+  return missingModuleHint(out.join('\n')).replaceAll(`"/home/pyodide/${job.path.replace(/^\//, '')}"`, `"${job.fileName}"`);
 }
 
-async function runPython(job) {
+async function bootPython(job) {
   const rt = job.pyodide;
   const blobs = {
     'pyodide.asm.wasm': new Blob([rt.wasm], { type: 'application/wasm' }),
@@ -218,12 +241,13 @@ async function runPython(job) {
   const realFetch = self.fetch.bind(self);
   self.fetch = (input, init) => {
     const url = String(input instanceof Request ? input.url : input);
+    const accept = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined)).get('accept');
     if (url.startsWith(PY_BASE)) {
       const name = url.slice(PY_BASE.length);
       if (blobs[name]) return Promise.resolve(new Response(blobs[name], { headers: { 'Content-Type': blobs[name].type } }));
-      if (job.network) return realFetch(rt.cdn + name, init);
-      return Promise.reject(new Error(`"${name}" isn't bundled with the app. Turn on internet access for the sandbox in Settings to download extra packages.`));
+      return fetchPackage(rt.cdn + name, accept);
     }
+    if (PACKAGE_HOSTS.test(url) || url.startsWith(rt.cdn)) return fetchPackage(url, accept);
     return realFetch(input, init);
   };
 
@@ -248,6 +272,95 @@ async function runPython(job) {
   py.setStdout({ write: (buf) => (emit('stdout', decoder.decode(buf, { stream: true })), buf.length) });
   py.setStderr({ write: (buf) => (emit('stderr', decoder.decode(buf, { stream: true })), buf.length) });
   py.setStdin({ stdin: () => readLine(), autoEOF: true });
+  return py;
+}
+
+/** Loads the bundled micropip (Pyodide's pip) and returns it. */
+function setupMicropip(py, job) {
+  const wheels = job.pyodide.micropip || [];
+  if (wheels.length < 2) throw new Error("pip isn't available in this build of the app");
+  const site = py.runPython('import site; site.getsitepackages()[0]');
+  for (const w of wheels) py.unpackArchive(w.data, 'wheel', { extractDir: site });
+  // micropip prints its own pip-style log ("Collecting…", "Successfully installed…") to stdout.
+  py.runPython("import logging; logging.getLogger('micropip').setLevel(logging.INFO)");
+  return py.pyimport('micropip');
+}
+
+const NO_WASM = {
+  torch: 'PyTorch', pytorch: 'PyTorch', torchvision: 'PyTorch', torchaudio: 'PyTorch', tensorflow: 'TensorFlow',
+  'tensorflow-cpu': 'TensorFlow', keras: 'Keras', jax: 'JAX', jaxlib: 'JAX',
+};
+
+function pipErrorHint(message, requirements) {
+  const names = requirements.map((r) => r.toLowerCase().split(/[<>=!~\[; ]/)[0]);
+  const heavy = names.find((n) => NO_WASM[n]);
+  if (heavy) {
+    return `\n${NO_WASM[heavy]} can't run here: it needs native code that hasn't been built for WebAssembly (the Python engine this app uses on Android). ` +
+      'For machine learning, scikit-learn, numpy, scipy, xgboost and lightgbm do work — e.g. "pip install scikit-learn".';
+  }
+  if (/Can't find a pure Python 3 wheel/i.test(message)) {
+    return '\nOnly pure-Python packages from PyPI, and the packages Pyodide has built for WebAssembly (numpy, pandas, scipy, scikit-learn, matplotlib, …), can be installed.';
+  }
+  if (/Failed to fetch|NetworkError|offline|internet/i.test(message)) return '\nCheck your internet connection: installing packages needs to download them once.';
+  return '';
+}
+
+async function runPip(job) {
+  const py = await bootPython(job);
+  const micropip = setupMicropip(py, job);
+  postMessage({ type: 'status', text: 'Installing…' });
+  py.runPython(`
+from packaging.requirements import Requirement as _Req
+from packaging.utils import canonicalize_name as _canon
+import micropip as _mp, json as _json
+def _pin(reqs):
+    have = {_canon(name): (name, meta.version) for name, meta in _mp.list().items()}
+    out = {}
+    for r in reqs:
+        hit = have.get(_canon(_Req(r).name))
+        if hit:
+            out[r] = f"{hit[0]}=={hit[1]}"
+    return _json.dumps(out)
+`);
+  let failure = null;
+  try {
+    await micropip.install.callKwargs(job.requirements, { keep_going: true });
+  } catch (err) {
+    failure = String(err?.message || err);
+  }
+  const pinned = JSON.parse(py.globals.get('_pin')(job.requirements));
+  // micropip can report success even if a package's download failed, so check each one.
+  const failed = job.requirements.filter((r) => !pinned[r]);
+  if (!failed.length) {
+    // Make sure every installed package really imports.
+    for (const [req, spec] of Object.entries(pinned)) {
+      const top = py.runPython(`
+import importlib.metadata as _md, json as _json
+_d = _md.distribution(${JSON.stringify(spec.split('==')[0])})
+_t = (_d.read_text('top_level.txt') or '').split()
+_json.dumps(_t)
+`);
+      for (const mod of JSON.parse(top).slice(0, 3)) {
+        try {
+          py.pyimport(mod);
+        } catch {
+          failed.push(req);
+          delete pinned[req];
+          break;
+        }
+      }
+    }
+  }
+  postMessage({ type: 'pip-result', pinned });
+  if (failed.length && !failure) failure = `Failed to install ${failed.join(', ')}`;
+  if (failure) {
+    const last = failure.trim().split('\n').filter((l) => !/^\s+File |^\s{4}/.test(l)).slice(-2).join('\n');
+    throw new Error('ERROR: ' + last.replace(/^(ValueError|RuntimeError|Exception): /, '') + pipErrorHint(failure, job.requirements));
+  }
+}
+
+async function runPython(job) {
+  const py = await bootPython(job);
 
   // Make input() interactive: answers typed in the Input box are used first, then the program
   // pauses and the app asks you for the next line (needs WebAssembly JSPI, in Chrome 137+).
@@ -284,14 +397,21 @@ del input, _b
   py.FS.chdir(dir);
   py.runPython(`import sys; sys.path.insert(0, ${JSON.stringify(dir)})`);
 
-  try {
-    await py.loadPackagesFromImports(job.code, {
-      messageCallback: (msg) => emit('info', msg + '\n'),
-      errorCallback: (msg) => emit('info', msg + '\n'),
-    });
-  } catch (err) {
-    emit('info', String(err?.message || err) + '\n');
+  // Packages installed with pip (served from the on-device cache).
+  if (job.packages?.length) {
+    postMessage({ type: 'status', text: 'Loading packages…' });
+    try {
+      const micropip = setupMicropip(py, job);
+      py.runPython("import logging; logging.getLogger('micropip').setLevel(logging.WARNING)");
+      await micropip.install.callKwargs(job.packages, { keep_going: true });
+    } catch (err) {
+      const msg = String(err?.message || err).trim().split('\n').slice(-1)[0];
+      emit('info', `Some pip packages couldn't be loaded: ${msg}\n`);
+    }
   }
+  try {
+    await py.loadPackagesFromImports(job.code, { messageCallback: (msg) => /^Loaded /.test(msg) || emit('info', msg + '\n'), errorCallback: () => {} });
+  } catch {}
 
   postMessage({ type: 'status', text: 'Running…', running: true });
   try {
@@ -304,6 +424,7 @@ del input, _b
 // --- Entry point ---------------------------------------------------------------------------------
 
 self.onmessage = async (event) => {
+  if (event.data?.type === 'pkg-reply') return onPackageReply(event.data);
   if (event.data?.type === 'input-reply') {
     const text = String(event.data.text ?? '');
     emit('stdin', text + '\n');
@@ -317,6 +438,7 @@ self.onmessage = async (event) => {
   let ok = true;
   try {
     if (job.lang === 'python') await runPython(job);
+    else if (job.lang === 'pip') await runPip(job);
     else await runJs(job);
   } catch (err) {
     ok = false;
