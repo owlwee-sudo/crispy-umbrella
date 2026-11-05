@@ -1091,3 +1091,436 @@ body.has-file:not(.no-keys) .keys {
 .monaco-editor .suggest-widget {
   max-width: calc(100vw - 16px);
 }
+
+/* ------------------------------------------------------------- terminal */
+
+.term-panel {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  height: 42%;
+  min-height: 180px;
+  border-top: 1px solid var(--border);
+  background: var(--term-bg, #101216);
+  position: relative;
+}
+.term-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 4px 0 12px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.term-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.term-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.term-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.term {
+  position: absolute;
+  inset: 4px 2px 2px 8px;
+}
+.term .xterm-viewport {
+  background: transparent !important;
+}
+.term-keys {
+  display: flex;
+}
+body.term-open .keys:not(.term-keys) {
+  display: none !important;
+}
+@media (max-width: 899px) {
+  /* Phones: the terminal takes the whole screen; the editor is one tap away. */
+  .term-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    height: auto;
+    padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
+    border-top: 0;
+  }
+  .term-panel .term-keys {
+    padding-bottom: calc(4px + var(--safe-bottom));
+    height: calc(var(--keys-h) + var(--safe-bottom));
+  }
+  .kb-open .term-panel .term-keys {
+    padding-bottom: 4px;
+    height: var(--keys-h);
+  }
+}
+
+.term-boot {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text);
+  background: var(--term-bg, #101216);
+}
+.booting .term-boot {
+  display: flex;
+}
+.boot-label {
+  font-size: 15px;
+  font-weight: 600;
+}
+.boot-failed .boot-label {
+  color: var(--danger);
+}
+.boot-hint {
+  max-width: 320px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.boot-track {
+  width: min(320px, 80%);
+  height: 14px;
+  border-radius: 99px;
+  background: rgba(127, 127, 127, 0.2);
+  overflow: hidden;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.boot-bar {
+  position: relative;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(to bottom, #9fe6ff 0%, #35b6f2 50%, #1a9be0 51%, #5fd0ff 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  transition: width 0.3s ease;
+  overflow: hidden;
+}
+.boot-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.7) 45%, transparent 70%);
+  transform: translateX(-100%);
+  animation: sheen 1.6s ease-in-out infinite;
+}
+@keyframes sheen {
+  to {
+    transform: translateX(100%);
+  }
+}
+.boot-orb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+}
+.boot-orb span {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  left: 21px;
+  top: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff 0 12%, #9be7ff 30%, #2aa6e8 70%, #0b7fc4);
+  box-shadow: 0 2px 6px rgba(0, 90, 160, 0.4);
+  transform-origin: 11px 32px;
+  animation: orbit 1.4s linear infinite;
+}
+.boot-orb span:nth-child(2) {
+  animation-delay: -0.47s;
+  background: radial-gradient(circle at 35% 30%, #fff 0 12%, #c6ff9b 30%, #4cc94c 70%, #2a9a2a);
+}
+.boot-orb span:nth-child(3) {
+  animation-delay: -0.93s;
+  background: radial-gradient(circle at 35% 30%, #fff 0 12%, #aef7ff 30%, #22c3d6 70%, #0f8ea0);
+}
+@keyframes orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ======================================================================
+   Frutiger Aero theme: glass, gloss, sky, water and bubbles
+   ====================================================================== */
+
+:root[data-theme='aero'] {
+  --bg: rgba(255, 255, 255, 0.5);
+  --bg-2: rgba(255, 255, 255, 0.34);
+  --bg-3: rgba(255, 255, 255, 0.55);
+  --bg-hover: rgba(255, 255, 255, 0.6);
+  --border: rgba(255, 255, 255, 0.65);
+  --text: #0b3556;
+  --text-2: #24597f;
+  --text-3: #4f7ea3;
+  --accent: #0a8fe0;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(80, 190, 255, 0.28);
+  --danger: #d6332a;
+  --status: #3fbf4a;
+  --status-text: #ffffff;
+  --shadow: 0 14px 40px rgba(0, 70, 140, 0.3);
+  --term-bg: rgba(4, 28, 52, 0.72);
+  --glass: rgba(255, 255, 255, 0.32);
+  --gloss: linear-gradient(to bottom, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.18) 48%, rgba(255, 255, 255, 0) 52%);
+  --ui-font: 'Segoe UI', 'Frutiger', 'Myriad Pro', 'Helvetica Neue', system-ui, sans-serif;
+  color-scheme: light;
+}
+
+/* Sky, sun glow, meadow and soft bokeh behind everything */
+:root[data-theme='aero'] body {
+  background:
+    radial-gradient(circle at 82% 8%, rgba(255, 255, 255, 0.95) 0 4%, rgba(255, 255, 230, 0.55) 9%, transparent 26%),
+    radial-gradient(ellipse 140% 45% at 50% 108%, #7ee36b 0 38%, #3cb44a 52%, transparent 53%),
+    radial-gradient(ellipse 120% 40% at 10% 100%, rgba(170, 255, 140, 0.8), transparent 60%),
+    linear-gradient(to bottom, #1677d2 0%, #3fa9f5 32%, #8fd6ff 62%, #d8f4ff 82%);
+  background-attachment: fixed;
+}
+:root[data-theme='aero'] body::before,
+:root[data-theme='aero'] body::after {
+  content: '';
+  position: fixed;
+  inset: -10% 0 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 12% 70%, rgba(255, 255, 255, 0.55) 0 1.6%, rgba(255, 255, 255, 0.12) 2.2%, transparent 2.6%),
+    radial-gradient(circle at 28% 40%, rgba(255, 255, 255, 0.45) 0 1%, rgba(255, 255, 255, 0.1) 1.5%, transparent 1.8%),
+    radial-gradient(circle at 64% 82%, rgba(255, 255, 255, 0.5) 0 2.2%, rgba(255, 255, 255, 0.1) 2.9%, transparent 3.3%),
+    radial-gradient(circle at 88% 55%, rgba(255, 255, 255, 0.4) 0 1.2%, rgba(255, 255, 255, 0.1) 1.7%, transparent 2%),
+    radial-gradient(circle at 46% 20%, rgba(255, 255, 255, 0.35) 0 0.8%, transparent 1.3%);
+  animation: bubbles 26s linear infinite;
+}
+:root[data-theme='aero'] body::after {
+  animation-duration: 38s;
+  animation-delay: -12s;
+  transform: scale(1.4);
+  opacity: 0.7;
+}
+@keyframes bubbles {
+  from {
+    transform: translateY(12%);
+  }
+  to {
+    transform: translateY(-12%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme='aero'] body::before,
+  :root[data-theme='aero'] body::after {
+    animation: none;
+  }
+}
+:root[data-theme='aero'] #app {
+  z-index: 1;
+}
+
+/* Glass surfaces */
+:root[data-theme='aero'] .topbar,
+:root[data-theme='aero'] .drawer,
+:root[data-theme='aero'] .keys,
+:root[data-theme='aero'] .palette,
+:root[data-theme='aero'] .dialog,
+:root[data-theme='aero'] .action-sheet,
+:root[data-theme='aero'] .sheet-head,
+:root[data-theme='aero'] .term-head,
+:root[data-theme='aero'] .console,
+:root[data-theme='aero'] .sandbox-note {
+  background-color: var(--glass);
+  background-image: var(--gloss);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
+  border-color: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+:root[data-theme='aero'] .palette,
+:root[data-theme='aero'] .dialog,
+:root[data-theme='aero'] .action-sheet {
+  background-color: rgba(235, 248, 255, 0.72);
+  box-shadow: inset 0 1px 0 #fff, var(--shadow);
+}
+:root[data-theme='aero'] .overlay {
+  background: rgba(0, 60, 120, 0.18);
+}
+:root[data-theme='aero'] .editor-wrap {
+  background: rgba(255, 255, 255, 0.35);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+:root[data-theme='aero'] .monaco-editor,
+:root[data-theme='aero'] .monaco-editor .margin,
+:root[data-theme='aero'] .monaco-editor-background {
+  background-color: transparent !important;
+}
+:root[data-theme='aero'] .sheet {
+  background: rgba(225, 245, 255, 0.6);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+:root[data-theme='aero'] .welcome h1 {
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(0, 60, 130, 0.45);
+}
+:root[data-theme='aero'] .welcome p {
+  color: #0b3556;
+}
+
+/* Tabs: glassy, the active one bright and glossy */
+:root[data-theme='aero'] .tab {
+  border-right-color: rgba(255, 255, 255, 0.5);
+}
+:root[data-theme='aero'] .tab.active {
+  background: rgba(255, 255, 255, 0.7) var(--gloss);
+  box-shadow: inset 0 1px 0 #fff, 0 0 12px rgba(120, 210, 255, 0.6);
+}
+:root[data-theme='aero'] .tab.active::after {
+  background: linear-gradient(90deg, #1fb1ff, #49d16a);
+  height: 3px;
+}
+
+/* Jelly buttons */
+:root[data-theme='aero'] .btn {
+  border-radius: 999px;
+  border: 1px solid rgba(0, 90, 160, 0.45);
+  background: linear-gradient(to bottom, #a8ecff 0%, #3dbaf5 48%, #1597de 52%, #46c8ff 100%);
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(0, 50, 100, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -2px 6px rgba(160, 240, 255, 0.6), 0 3px 10px rgba(0, 100, 180, 0.35);
+}
+:root[data-theme='aero'] .btn.ghost {
+  border-color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.55) var(--gloss);
+  color: #0b3556;
+  text-shadow: none;
+}
+:root[data-theme='aero'] .btn.danger {
+  border-color: rgba(150, 20, 10, 0.5);
+  background: linear-gradient(to bottom, #ffb3a8 0%, #f45b4b 48%, #d8392a 52%, #ff7a63 100%);
+}
+:root[data-theme='aero'] .icon-btn {
+  color: #0d4f80;
+  border-radius: 50%;
+}
+:root[data-theme='aero'] .icon-btn:hover,
+:root[data-theme='aero'] .icon-btn:active,
+:root[data-theme='aero'] .activity-btn.active {
+  color: #fff;
+  background: radial-gradient(circle at 50% 30%, #c9f2ff 0 10%, #47bdf6 45%, #0f88d6 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 8px rgba(0, 110, 190, 0.45);
+}
+
+/* Keys bars: glossy pebbles */
+:root[data-theme='aero'] .key {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.6) var(--gloss);
+  color: #0b3556;
+  box-shadow: 0 2px 5px rgba(0, 80, 150, 0.25);
+}
+:root[data-theme='aero'] .key:active,
+:root[data-theme='aero'] .key.on {
+  color: #fff;
+  background: linear-gradient(to bottom, #a8ecff 0%, #3dbaf5 48%, #1597de 52%, #46c8ff 100%);
+}
+
+/* Status bar: green-aqua gloss */
+:root[data-theme='aero'] .statusbar {
+  background: linear-gradient(to bottom, #c8f79f 0%, #5ccf4f 48%, #34b240 52%, #6edc63 100%);
+  border-top: 1px solid rgba(255, 255, 255, 0.8);
+  text-shadow: 0 1px 1px rgba(0, 70, 0, 0.45);
+}
+
+/* Explorer */
+:root[data-theme='aero'] .row:hover {
+  background: rgba(255, 255, 255, 0.45);
+}
+:root[data-theme='aero'] .row.active,
+:root[data-theme='aero'] .palette-item.selected,
+:root[data-theme='aero'] .palette-item:hover {
+  background: linear-gradient(to bottom, rgba(190, 235, 255, 0.95), rgba(120, 205, 255, 0.75));
+  box-shadow: inset 0 1px 0 #fff, inset 0 0 0 1px rgba(80, 170, 230, 0.5);
+  border-radius: 6px;
+}
+:root[data-theme='aero'] .badge {
+  background: color-mix(in srgb, var(--badge) 22%, white);
+  box-shadow: inset 0 1px 0 #fff;
+}
+:root[data-theme='aero'] .folder {
+  background: linear-gradient(to bottom, #ffe58a, #f2b630);
+}
+
+/* Inputs */
+:root[data-theme='aero'] input[type='text'],
+:root[data-theme='aero'] input[type='search'],
+:root[data-theme='aero'] textarea,
+:root[data-theme='aero'] select,
+:root[data-theme='aero'] #palette-input {
+  background: rgba(255, 255, 255, 0.85) !important;
+  border-radius: 10px;
+  box-shadow: inset 0 1px 3px rgba(0, 60, 120, 0.2);
+}
+
+/* Terminal: dark tinted glass */
+:root[data-theme='aero'] .term-panel {
+  background: rgba(4, 28, 52, 0.72);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+  border-top: 1px solid rgba(255, 255, 255, 0.7);
+}
+:root[data-theme='aero'] .term-boot {
+  color: #e9f8ff;
+}
+:root[data-theme='aero'] .term-boot .boot-hint {
+  color: #a6d4f0;
+}
+:root[data-theme='aero'] .console-out,
+:root[data-theme='aero'] .stage {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+/* Landscape phones / short screens: give the docked terminal most of the height */
+@media (min-width: 900px) and (max-height: 620px) {
+  .term-panel {
+    height: 72%;
+  }
+}
+
+/* Aero terminal header: dark tinted glass so the labels stay readable */
+:root[data-theme='aero'] .term-head {
+  background-color: rgba(8, 48, 86, 0.62);
+  border-bottom-color: rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+:root[data-theme='aero'] .term-head .term-title {
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme='aero'] .term-head .term-sub {
+  color: #b9e3ff;
+}
+:root[data-theme='aero'] .term-head .icon-btn {
+  color: #dff4ff;
+}
+:root[data-theme='aero'] .term-head .run-status.ok {
+  background: linear-gradient(to bottom, #b8f59a, #42c447);
+  color: #0b3a10;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+:root[data-theme='aero'] .term-head .run-status.running {
+  background: linear-gradient(to bottom, #b4ecff, #3db4ef);
+  color: #04304f;
+}

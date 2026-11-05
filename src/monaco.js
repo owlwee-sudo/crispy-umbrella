@@ -54,6 +54,37 @@ monaco.editor.defineTheme('pocket-light', {
   },
 });
 
+// Frutiger Aero: glassy, see-through editor over a sky backdrop.
+monaco.editor.defineTheme('pocket-aero', {
+  base: 'vs',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '3f8a6a', fontStyle: 'italic' },
+    { token: 'keyword', foreground: '0059b3', fontStyle: 'bold' },
+    { token: 'string', foreground: 'b3006b' },
+    { token: 'number', foreground: '0a8f3c' },
+    { token: 'type', foreground: '007a99' },
+  ],
+  colors: {
+    'editor.background': '#ffffff8c',
+    'editorGutter.background': '#ffffff00',
+    'editor.lineHighlightBackground': '#bfe8ff80',
+    'editor.lineHighlightBorder': '#ffffffaa',
+    'editor.selectionBackground': '#7cc8ff88',
+    'editorLineNumber.foreground': '#5b8db3',
+    'editorLineNumber.activeForeground': '#0b3556',
+    'editorCursor.foreground': '#0077d9',
+    'editorWidget.background': '#eaf7ffee',
+    'editorWidget.border': '#9fd4f5',
+    'editorSuggestWidget.background': '#f0faffee',
+    'editorSuggestWidget.selectedBackground': '#bfe6ff',
+    'editorHoverWidget.background': '#f0faffee',
+    'minimap.background': '#ffffff40',
+    'scrollbarSlider.background': '#3fa9f555',
+    'scrollbarSlider.hoverBackground': '#3fa9f588',
+  },
+});
+
 // TypeScript: compile to CommonJS so programs can be run in the sandbox.
 const ts = monaco.typescript;
 ts.typescriptDefaults.setCompilerOptions({

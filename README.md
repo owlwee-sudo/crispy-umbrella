@@ -13,6 +13,8 @@ It's an independent project and isn't affiliated with Microsoft or Visual Studio
 - **Search across all files.**
 - **Extra keys bar** above the on-screen keyboard with Tab (accepts the highlighted suggestion, otherwise indents), arrows, a select mode (⇧), brackets and symbols, undo/redo, copy/cut/paste, comment, find, and format. Hold an arrow to repeat it.
 - **Run ▶ in a sandbox:** run **Python**, **JavaScript** and **TypeScript** programs, and preview **HTML**, Markdown and SVG. See [Running code](#running-code) below.
+- **Linux terminal 🐧:** a real Linux shell in an x86 PC emulated inside the app (v86). Your workspace is shared with it at `/workspace`. See [Terminal](#terminal-linux-vm) below.
+- **Frutiger Aero theme 🫧:** glassy panels, glossy jelly buttons, and a sky-and-meadow backdrop with drifting bubbles. Dark and Light themes are still in Settings.
 - **Autosave:** files are stored on the device (IndexedDB) and your open tabs come back when you reopen the app.
 - **Import/export:** open files or a whole `.zip` project from your phone, and export the workspace as a `.zip` through the Android share sheet.
 - Dark and light themes, plus font size, tab size, word wrap, minimap, and line numbers in Settings.
@@ -49,6 +51,19 @@ Every run starts in a brand-new isolated sandbox that's thrown away afterwards:
 - HTML pages run on the page's main thread, so an infinite loop in a page's own script can still make the preview hang. Close the preview to recover.
 
 Limitations: JS `prompt()` can't pause, so it reads answers from the **Prepared input** box. Python's `input()` is interactive on modern Android System WebView (Chrome 137+) and falls back to the Prepared input box on older ones. Only Python's standard library is bundled; other packages need internet access. JS/TS files can't `import` other workspace files.
+
+## Terminal (Linux VM)
+
+Tap the terminal button in the top bar, press **Ctrl+`**, or run **Terminal: Toggle Linux Terminal** from the Command Palette.
+
+- It's **real Linux** (kernel 5.4, 32-bit) with BusyBox: `ls`, `cd`, `cat`, `grep`, `sed`, `awk`, `find`, `vi`, `less`, `tar`, `top`, shell scripts, pipes and so on. Type `help` inside for tips.
+- The whole PC is **emulated in WebAssembly** by [v86](https://github.com/copy/v86), in a background thread. That makes it slow-ish: it boots in about 7–10 s on a laptop and maybe 15–30 s on a phone. Linux keeps running while the panel is hidden, and pauses while the app is in the background.
+- **`/workspace` is your editor workspace**, synced both ways: files you create, edit (even ones open in the editor), or delete in Linux show up in the Explorer, and the other way round. Binary files and files over 2 MB stay in the VM only. Everything outside `/workspace` resets when Linux restarts (↻).
+- The extra keys row adds **Esc, Tab, Ctrl** (tap it, then a letter), arrows, **^C**, **^D**, common symbols and Paste. The VM learns the terminal size automatically, including after you rotate the phone.
+- It's completely isolated: the emulated PC has no network card and no access to the phone. Its only connections are the terminal and the shared `/workspace` folder.
+- No package manager or internet inside, so no `apt`, `npm` or `gcc`. Run Python, JS and TS with the ▶ button instead.
+
+The image is assembled by `scripts/build-vm.mjs` during `npm run build`. Nothing is compiled: it downloads Ubuntu's own prebuilt i386 packages from archive.ubuntu.com, checks their SHA-256 hashes, unpacks them, and writes a small initramfs (BusyBox, the 9p shared-folder drivers, and a startup script). Building needs `dpkg-deb`, which Ubuntu/Debian have. Without it, the build still works but the terminal is disabled.
 
 ## Get it on your phone
 
@@ -95,8 +110,9 @@ index.html            App shell (side bar, tabs, editor, keys bar, status bar, o
 src/main.js           App logic: tabs, explorer, palette, commands, search, run panel, import/export
 src/sandbox/          Code sandbox: isolated iframe + worker runtime for JS/TS/Python
 src/python/           Python IntelliSense (Jedi in a background worker) and pip package manager
-scripts/              Build helper that bundles the Python runtime and downloads the Jedi, parso,
-                      micropip and packaging wheels from PyPI (checked against pinned SHA-256 hashes)
+src/vm/               Linux terminal: v86 emulator worker, xterm.js panel, /workspace sync
+scripts/              Build helpers: bundle the Python runtime and pinned PyPI wheels (Jedi, parso,
+                      micropip, packaging), and assemble the Linux VM image from Ubuntu packages
 src/monaco.js         Monaco setup, language workers, themes
 src/fs.js             Virtual file system on IndexedDB
 src/platform.js       Native bridges (clipboard, share/save, back button, system bars)
@@ -109,8 +125,26 @@ capacitor.config.json Capacitor settings (app id: dev.pocketcode.app)
 
 ## Limitations
 
-- There are no extensions, integrated terminal, Git, or debugger. Those depend on a desktop Node.js host that Android doesn't have.
+- There are no extensions, Git, or debugger. Extensions depend on a desktop Node.js host that Android doesn't have.
+- The terminal is an emulated 32-bit PC with BusyBox, not your phone's own Linux: no internet, no package manager, and it's much slower than a real computer.
 - **Run** supports Python, JavaScript, TypeScript, HTML, Markdown and SVG. Other languages (C, Java, Rust, …) can be edited but not run.
 - The Python runtime adds about 13 MB to the app, and starting it takes a few seconds per run.
 - Imports only accept text files. Binary files such as images are skipped.
 - Microsoft doesn't officially support Monaco on mobile, so some keyboard apps may behave a little oddly with autocorrect or suggestions. Turning off autocorrect for the keyboard helps.
+
+## Third-party software
+
+Pocket Code bundles open-source components under their own licenses:
+
+| Component | License | Source |
+|---|---|---|
+| [Monaco Editor](https://github.com/microsoft/monaco-editor) | MIT | npm `monaco-editor` |
+| [Pyodide](https://pyodide.org) (CPython for WebAssembly) | MPL-2.0 (CPython: PSF) | npm `pyodide` |
+| Jedi, parso, micropip, packaging | MIT / BSD / Apache-2.0 | PyPI (pinned in `scripts/copy-pyodide.mjs`) |
+| [v86](https://github.com/copy/v86) | BSD-2-Clause | npm `v86` |
+| [xterm.js](https://xtermjs.org) | MIT | npm `@xterm/xterm` |
+| Linux kernel 5.4.0-152 (Ubuntu `linux-hwe-5.4` 5.4.0-152.169~18.04.1, i386) | GPL-2.0 | [archive.ubuntu.com/ubuntu/pool/main/l/linux-hwe-5.4/](http://archive.ubuntu.com/ubuntu/pool/main/l/linux-hwe-5.4/) |
+| BusyBox 1.37.0 (Ubuntu `busybox` 1:1.37.0-7ubuntu1) | GPL-2.0 | [archive.ubuntu.com/ubuntu/pool/main/b/busybox/](http://archive.ubuntu.com/ubuntu/pool/main/b/busybox/) |
+| SeaBIOS 1.16.3 (Ubuntu `seabios` 1.16.3-2) | LGPL-3.0 | [archive.ubuntu.com/ubuntu/pool/main/s/seabios/](http://archive.ubuntu.com/ubuntu/pool/main/s/seabios/) |
+
+The corresponding source code for the GPL/LGPL components is available from the Ubuntu archive links above, as source packages next to the binaries.

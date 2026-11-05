@@ -15,3 +15,4 @@ android/capacitor-cordova-android-plugins/
 *.apk
 *.aab
 public/pyodide/
+public/vm/

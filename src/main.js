@@ -6,6 +6,7 @@ import { seed } from './seed.js';
 import { isNative, copyText, pasteText, saveFile, onBackButton, setSystemBarsTheme } from './platform.js';
 import { setupPythonIntellisense, pythonFilesChanged } from './python/intellisense.js';
 import * as pip from './python/packages.js';
+import { createTerminal } from './vm/terminal.js';
 import { runProgram, showPage, stop as stopSandbox, clear as clearSandbox, sandboxHtml, loadPyodideFiles, sendInput } from './sandbox/index.js';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +51,7 @@ const settings = {
   ...store.get('settings', {}),
 };
 
+const MONACO_THEMES = { dark: 'pocket-dark', light: 'pocket-light', aero: 'pocket-aero' };
 const session = store.get('session', { open: [], active: null, expanded: ['/'] });
 const fs = new FileSystem();
 const models = new Map(); // path -> monaco model
@@ -156,7 +158,7 @@ async function run(fn) {
 const editor = monaco.editor.create($('#editor'), {
   model: null,
   automaticLayout: true,
-  theme: settings.theme === 'dark' ? 'pocket-dark' : 'pocket-light',
+  theme: MONACO_THEMES[settings.theme] || 'pocket-dark',
   fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, 'Roboto Mono', monospace",
   fontSize: settings.fontSize,
   fontLigatures: true,
@@ -182,9 +184,10 @@ const editor = monaco.editor.create($('#editor'), {
 function applySettings() {
   store.set('settings', settings);
   document.documentElement.dataset.theme = settings.theme;
-  monaco.editor.setTheme(settings.theme === 'dark' ? 'pocket-dark' : 'pocket-light');
-  $('meta[name=theme-color]').content = settings.theme === 'dark' ? '#16181d' : '#f3f4f6';
+  monaco.editor.setTheme(MONACO_THEMES[settings.theme] || 'pocket-dark');
+  $('meta[name=theme-color]').content = { dark: '#16181d', light: '#f3f4f6', aero: '#3fa9f5' }[settings.theme] || '#16181d';
   setSystemBarsTheme(settings.theme);
+  vm?.setTheme(settings.theme);
   editor.updateOptions({
     fontSize: settings.fontSize,
     wordWrap: settings.wordWrap ? 'on' : 'off',
@@ -237,6 +240,7 @@ async function saveNow(path) {
   if (model && !model.isDisposed() && fs.get(path)?.type === 'file') {
     await fs.write(path, model.getValue(), { silent: true }).catch((e) => toast('Save failed: ' + e.message));
     if (path.endsWith('.py')) pythonFilesChanged();
+    vmWrite(path);
   }
   setSaveStatus();
   renderTabs();
@@ -488,6 +492,7 @@ async function deleteEntry(path) {
 
 fs.addEventListener('change', ({ detail }) => {
   pythonFilesChanged();
+  syncToVm(detail);
   if (detail.type === 'remove' || detail.type === 'clear') {
     const gone = new Set(detail.type === 'clear' ? [...openTabs, ...models.keys(), ...expanded] : detail.paths);
     const activeGone = activePath && gone.has(activePath);
@@ -750,7 +755,7 @@ function pickLanguage() {
 
 function pickTheme() {
   const source = () =>
-    ['dark', 'light'].map((t) => ({ label: t === 'dark' ? 'Dark' : 'Light', detail: settings.theme === t ? 'current' : '', run: () => ((settings.theme = t), applySettings()) }));
+    [['aero', 'Aero (glossy sky)'], ['dark', 'Dark'], ['light', 'Light']].map(([t, label]) => ({ label, detail: settings.theme === t ? 'current' : '', run: () => ((settings.theme = t), applySettings()) }));
   source.placeholder = 'Select color theme';
   openPalette('', source);
 }
@@ -799,6 +804,8 @@ const commands = [
   { id: 'pref.keys', title: 'View: Toggle Extra Keys Bar', run: () => ((settings.extraKeys = !settings.extraKeys), applySettings()) },
   { id: 'pref.zoomIn', title: 'View: Increase Font Size', run: () => ((settings.fontSize = Math.min(32, settings.fontSize + 1)), applySettings()) },
   { id: 'pref.zoomOut', title: 'View: Decrease Font Size', run: () => ((settings.fontSize = Math.max(8, settings.fontSize - 1)), applySettings()) },
+  { id: 'terminal.toggle', title: 'Terminal: Toggle Linux Terminal', key: 'Ctrl+`', run: () => vm.toggle() },
+  { id: 'terminal.restart', title: 'Terminal: Restart Linux VM', run: () => vm.restart() },
   { id: 'pip.install', title: 'pip: Install Python Packages…', run: () => askPipInstall() },
   { id: 'pip.requirements', title: 'pip: Install from requirements.txt', when: () => fs.files().some((f) => basename(f.path) === 'requirements.txt'), run: () => pipCommand('install -r ' + fs.files().find((f) => basename(f.path) === 'requirements.txt').path) },
   { id: 'pip.manage', title: 'pip: List / Uninstall Packages', run: () => managePackages() },
@@ -827,6 +834,7 @@ addEventListener(
       g: mod && !e.shiftKey ? 'editor.gotoLine' : null,
       ',': mod ? 'pref.settings' : null,
       f5: e.shiftKey ? 'run.stop' : 'run.preview',
+      '`': mod ? 'terminal.toggle' : null,
       f1: 'palette.open',
       z: e.altKey && !mod ? 'pref.wrap' : null,
     };
@@ -858,7 +866,7 @@ function openSettings() {
   const body = el(
     'div',
     { className: 'settings' },
-    row('Theme', select('theme', [['dark', 'Dark'], ['light', 'Light']])),
+    row('Theme', select('theme', [['aero', 'Aero (glossy sky)'], ['dark', 'Dark'], ['light', 'Light']])),
     row('Font size', select('fontSize', [10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24].map((n) => [n, n + ' px']), Number)),
     row('Tab size', select('tabSize', [[2, '2 spaces'], [4, '4 spaces'], [8, '8 spaces']], Number)),
     row('Word wrap', toggle('wordWrap')),
@@ -1516,6 +1524,7 @@ if (window.visualViewport) {
 
 onBackButton(() => {
   if (!$('#dialog').hidden) return closeDialog(false), true;
+  if (vm?.isOpen && !wide.matches && $('#preview').hidden && $('#palette').hidden && $('#actions').hidden) return vm.close(), true;
   if (!$('#actions').hidden) return closeActions(), true;
   if (!$('#palette').hidden) return closePalette(), true;
   if (!$('#preview').hidden) return closePreview(), true;
@@ -1536,8 +1545,95 @@ addEventListener('keydown', (e) => {
 // Boot
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Linux terminal (x86 VM) and two-way sync of /workspace
+// ---------------------------------------------------------------------------
+
+let vm = null;
+const fromVm = new Set(); // paths currently being applied from the VM (don't echo them back)
+const skippedNotified = new Set();
+
+function vmWrite(path) {
+  if (!vm || fromVm.has(path) || fs.get(path)?.type !== 'file') return;
+  vm.write(path, fileText(path));
+}
+
+function syncToVm(detail) {
+  if (!vm) return;
+  if (detail.type === 'create' || detail.type === 'write') vmWrite(detail.path);
+  else if (detail.type === 'remove' && !fromVm.has(detail.path)) vm.remove(detail.path);
+  else if (detail.type === 'rename') {
+    vm.remove(detail.from);
+    for (const [, to] of detail.pairs) vmWrite(to);
+  }
+}
+
+async function applyVmFile(path, text) {
+  if (fs.get(path)?.type === 'dir') return;
+  if (fs.get(path)?.type === 'file' && fileText(path) === text) return;
+  fromVm.add(path);
+  try {
+    const model = models.get(path);
+    if (model && !model.isDisposed()) {
+      model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+      await saveNow(path);
+    } else {
+      await fs.write(path, text);
+    }
+  } finally {
+    fromVm.delete(path);
+  }
+}
+
+async function applyVmMkdir(path) {
+  if (fs.exists(path)) return;
+  fromVm.add(path);
+  try {
+    await fs.mkdir(path);
+  } finally {
+    fromVm.delete(path);
+  }
+}
+
+async function applyVmDelete(path) {
+  if (!fs.exists(path)) return;
+  fromVm.add(path);
+  try {
+    await fs.remove(path);
+  } finally {
+    fromVm.delete(path);
+  }
+}
+
+function setupTerminal() {
+  vm = createTerminal({
+    panel: $('#term-panel'),
+    theme: () => settings.theme,
+    getFiles: () => {
+      flushSaves();
+      return Object.fromEntries(fs.files().map((f) => [f.path, fileText(f.path)]));
+    },
+    onVmFile: (path, text) => run(() => applyVmFile(path, text)),
+    onVmMkdir: (path) => run(() => applyVmMkdir(path)),
+    onVmDelete: (path) => run(() => applyVmDelete(path)),
+    onSkip: (path, reason) => {
+      if (skippedNotified.has(path)) return;
+      skippedNotified.add(path);
+      toast(`${basename(path)} stays in the VM only (${reason})`, 3500);
+    },
+    pasteText,
+    toast,
+  });
+}
+
 async function boot() {
   await fs.init(seed);
+  setupTerminal();
+  // First launch after this update: show off the new Aero look once.
+  if (!settings.aeroIntroduced) {
+    settings.aeroIntroduced = true;
+    settings.theme = 'aero';
+  }
   setupPythonIntellisense({
     getFiles: () => Object.fromEntries(fs.files().filter((f) => f.path.endsWith('.py')).map((f) => [f.path, fileText(f.path)])),
   });

@@ -5,9 +5,9 @@
   "type": "module",
   "description": "A VS Code-style code editor for Android, built on Monaco and Capacitor.",
   "scripts": {
-    "predev": "node scripts/copy-pyodide.mjs",
+    "predev": "node scripts/copy-pyodide.mjs && node scripts/build-vm.mjs",
     "dev": "vite --host",
-    "prebuild": "node scripts/copy-pyodide.mjs",
+    "prebuild": "node scripts/copy-pyodide.mjs && node scripts/build-vm.mjs",
     "build": "vite build",
     "preview": "vite preview --host",
     "android:sync": "npm run build && npx cap sync android",
@@ -21,9 +21,12 @@
     "@capacitor/core": "^8.6.0",
     "@capacitor/filesystem": "^8.1.5",
     "@capacitor/share": "^8.0.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
     "jszip": "^3.10.2",
     "monaco-editor": "^0.57.0",
-    "pyodide": "^314.0.7"
+    "pyodide": "^314.0.7",
+    "v86": "^0.5.473"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.0",
