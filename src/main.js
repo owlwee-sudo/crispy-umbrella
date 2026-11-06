@@ -36,13 +36,17 @@ const store = {
 };
 
 const coarse = matchMedia('(pointer: coarse)').matches;
-const wide = matchMedia('(min-width: 900px)');
+// Android treats a device as a tablet when its smallest screen side is at least 600dp.
+const tablet = Math.min(screen.width, screen.height) >= 600;
+const compact = coarse && !tablet; // a phone-sized touch screen
+// From 700px wide (portrait tablets, landscape phones/tablets) panels dock side by side.
+const wide = matchMedia('(min-width: 700px)');
 
 const settings = {
   theme: matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
-  fontSize: coarse ? 13 : 14,
+  fontSize: compact ? 13 : 14,
   wordWrap: coarse,
-  minimap: !coarse,
+  minimap: !compact,
   tabSize: 2,
   lineNumbers: true,
   extraKeys: coarse,
@@ -50,6 +54,13 @@ const settings = {
   timeLimit: 30,
   ...store.get('settings', {}),
 };
+
+// One-time tune-up for tablets that started with the phone defaults.
+if (tablet && coarse && !settings.tabletTuned) {
+  settings.tabletTuned = true;
+  if (settings.fontSize === 13) settings.fontSize = 14;
+  settings.minimap = true;
+}
 
 const MONACO_THEMES = { dark: 'pocket-dark', light: 'pocket-light', aero: 'pocket-aero' };
 const session = store.get('session', { open: [], active: null, expanded: ['/'] });
@@ -155,7 +166,7 @@ async function run(fn) {
 // Editor
 // ---------------------------------------------------------------------------
 
-const editor = monaco.editor.create($('#editor'), {
+const editorOptions = () => ({
   model: null,
   automaticLayout: true,
   theme: MONACO_THEMES[settings.theme] || 'pocket-dark',
@@ -172,14 +183,32 @@ const editor = monaco.editor.create($('#editor'), {
   cursorSmoothCaretAnimation: 'on',
   padding: { top: 8, bottom: 8 },
   fixedOverflowWidgets: true,
-  stickyScroll: { enabled: !coarse },
+  stickyScroll: { enabled: !compact },
   bracketPairColorization: { enabled: true },
   guides: { bracketPairs: 'active', indentation: true },
-  scrollbar: { verticalScrollbarSize: coarse ? 6 : 12, horizontalScrollbarSize: coarse ? 6 : 12 },
+  scrollbar: { verticalScrollbarSize: compact ? 6 : coarse ? 10 : 12, horizontalScrollbarSize: compact ? 6 : coarse ? 10 : 12 },
   renderLineHighlight: 'all',
-  folding: !coarse,
+  folding: !compact,
   glyphMargin: false,
 });
+
+// Two editor groups: the main one (with tabs) and an optional second one for the split view.
+// `editor` is whichever group was used last; commands, the keys bar and the status bar follow it.
+const primary = monaco.editor.create($('#editor'), editorOptions());
+let secondary = null;
+let secondaryPath = null;
+let editor = primary;
+const allEditors = () => [primary, secondary].filter(Boolean);
+const currentPath = () => (editor === secondary ? secondaryPath : activePath);
+
+function setActiveEditor(ed) {
+  if (editor === ed) return;
+  editor = ed;
+  $('#pane1').classList.toggle('active-pane', ed === primary);
+  $('#pane2').classList.toggle('active-pane', ed === secondary);
+  updateStatus();
+}
+primary.onDidFocusEditorText(() => setActiveEditor(primary));
 
 function applySettings() {
   store.set('settings', settings);
@@ -188,12 +217,15 @@ function applySettings() {
   $('meta[name=theme-color]').content = { dark: '#16181d', light: '#f3f4f6', aero: '#3fa9f5' }[settings.theme] || '#16181d';
   setSystemBarsTheme(settings.theme);
   vm?.setTheme(settings.theme);
-  editor.updateOptions({
-    fontSize: settings.fontSize,
-    wordWrap: settings.wordWrap ? 'on' : 'off',
-    minimap: { enabled: settings.minimap },
-    lineNumbers: settings.lineNumbers ? 'on' : 'off',
-  });
+  for (const ed of allEditors()) {
+    ed.updateOptions({
+      fontSize: settings.fontSize,
+      wordWrap: settings.wordWrap ? 'on' : 'off',
+      minimap: { enabled: settings.minimap },
+      lineNumbers: settings.lineNumbers ? 'on' : 'off',
+    });
+  }
+  diffEditor?.updateOptions({ fontSize: settings.fontSize });
   for (const m of models.values()) m.updateOptions({ tabSize: settings.tabSize, insertSpaces: true });
   document.body.classList.toggle('no-keys', !settings.extraKeys);
   updateStatus();
@@ -214,7 +246,7 @@ function updateStatus() {
   $('#st-indent').textContent = model ? `Spaces: ${model.getOptions().tabSize}` : '';
   $('#st-pos').hidden = $('#st-lang').hidden = $('#st-indent').hidden = !model;
 }
-editor.onDidChangeCursorSelection(updateStatus);
+primary.onDidChangeCursorSelection(() => editor === primary && updateStatus());
 
 function setSaveStatus() {
   $('#st-save').textContent = pendingSaves.size ? 'Saving…' : 'All changes saved';
@@ -273,23 +305,38 @@ function disposeModel(path) {
 // ---------------------------------------------------------------------------
 
 function persistSession() {
-  store.set('session', { open: openTabs, active: activePath, expanded: [...expanded] });
+  store.set('session', { open: openTabs, active: activePath, expanded: [...expanded], split: secondary ? secondaryPath : undefined });
 }
 
-function openFile(path, { line, focus = !coarse, keepDrawer = false } = {}) {
+function openFile(path, { line, focus = !coarse, keepDrawer = false, group } = {}) {
   path = normalize(path);
   if (fs.get(path)?.type !== 'file') return toast(`Can't open ${basename(path)}`);
-  if (activePath && activePath !== path) viewStates.set(activePath, editor.saveViewState());
+  const target = group === 'secondary' || (group !== 'primary' && editor === secondary && secondary) ? secondary : primary;
+  if (target === secondary) {
+    // The split side shows one file at a time; it shares the same document as the main side.
+    secondaryPath = path;
+    secondary.setModel(getModel(path));
+    if (line) {
+      secondary.revealLineInCenter(line);
+      secondary.setPosition({ lineNumber: line, column: 1 });
+    }
+    if (focus) secondary.focus();
+    if (!wide.matches && !keepDrawer) setDrawer(false);
+    renderSplitHead();
+    persistSession();
+    return;
+  }
+  if (activePath && activePath !== path) viewStates.set(activePath, primary.saveViewState());
   if (!openTabs.includes(path)) openTabs.push(path);
   activePath = path;
-  editor.setModel(getModel(path));
+  primary.setModel(getModel(path));
   const vs = viewStates.get(path);
-  if (vs) editor.restoreViewState(vs);
+  if (vs) primary.restoreViewState(vs);
   if (line) {
-    editor.revealLineInCenter(line);
-    editor.setPosition({ lineNumber: line, column: 1 });
+    primary.revealLineInCenter(line);
+    primary.setPosition({ lineNumber: line, column: 1 });
   }
-  if (focus) editor.focus();
+  if (focus) primary.focus();
   if (!wide.matches && !keepDrawer) setDrawer(false);
   renderAll();
 }
@@ -303,8 +350,8 @@ function closeTab(path) {
   if (activePath === path) {
     activePath = null;
     const next = openTabs[i] || openTabs[i - 1];
-    if (next) return openFile(next, { focus: false, keepDrawer: true });
-    editor.setModel(null);
+    if (next) return openFile(next, { focus: false, keepDrawer: true, group: 'primary' });
+    primary.setModel(null);
   }
   renderAll();
 }
@@ -329,7 +376,7 @@ function renderTabs() {
           },
         }),
       );
-      tab.addEventListener('click', () => openFile(path));
+      tab.addEventListener('click', () => openFile(path, { group: 'primary' }));
       tab.addEventListener('auxclick', (e) => e.button === 1 && closeTab(path));
       return tab;
     }),
@@ -500,7 +547,12 @@ fs.addEventListener('change', ({ detail }) => {
     openTabs = openTabs.filter((p) => !gone.has(p));
     if (activeGone) {
       activePath = null;
-      editor.setModel(null);
+      primary.setModel(null);
+    }
+    if (secondaryPath && gone.has(secondaryPath)) {
+      secondaryPath = null;
+      secondary?.setModel(null);
+      renderSplitHead();
     }
     for (const p of gone) {
       disposeModel(p);
@@ -508,7 +560,7 @@ fs.addEventListener('change', ({ detail }) => {
     }
     expanded.add('/');
     const next = activeGone && openTabs[Math.min(idx, openTabs.length - 1)];
-    if (next) return openFile(next, { focus: false, keepDrawer: true });
+    if (next) return openFile(next, { focus: false, keepDrawer: true, group: 'primary' });
   }
   if (detail.type === 'rename') {
     for (const [from, to] of detail.pairs) {
@@ -516,14 +568,15 @@ fs.addEventListener('change', ({ detail }) => {
       const i = openTabs.indexOf(from);
       if (i >= 0) openTabs[i] = to;
       if (models.has(from)) {
-        const vs = from === activePath ? editor.saveViewState() : viewStates.get(from);
+        const vs = from === activePath ? primary.saveViewState() : viewStates.get(from);
         disposeModel(from);
         if (vs) viewStates.set(to, vs);
       }
       if (activePath === from) {
         activePath = null;
-        openFile(to, { focus: false, keepDrawer: true });
+        openFile(to, { focus: false, keepDrawer: true, group: 'primary' });
       }
+      if (secondaryPath === from) openFile(to, { focus: false, keepDrawer: true, group: 'secondary' });
     }
   }
   renderAll();
@@ -580,12 +633,14 @@ $('#search-case').addEventListener('change', doSearch);
 // ---------------------------------------------------------------------------
 
 let drawerOpen = wide.matches ? store.get('drawer', true) : false;
-function setDrawer(open) {
+let drawerTucked = false; // hidden temporarily to make room for the preview
+function setDrawer(open, { remember = true } = {}) {
   drawerOpen = open;
+  if (remember) drawerTucked = false;
   document.body.classList.toggle('drawer-open', open);
   if (wide.matches) {
-    store.set('drawer', open);
-    requestAnimationFrame(() => editor.layout());
+    if (remember) store.set('drawer', open);
+    requestAnimationFrame(() => allEditors().forEach((ed) => ed.layout()));
   }
 }
 function showView(view) {
@@ -777,12 +832,18 @@ const commands = [
   { id: 'file.new', title: 'File: New File', run: () => newFile(activePath ? dirname(activePath) : '/') },
   { id: 'folder.new', title: 'File: New Folder', run: () => newFolder('/') },
   { id: 'file.save', title: 'File: Save', key: 'Ctrl+S', run: () => flushSaves().then(() => toast('Saved')) },
-  { id: 'file.close', title: 'View: Close Editor', when: hasModel, run: () => closeTab(activePath) },
+  { id: 'file.close', title: 'View: Close Editor', when: hasModel, run: () => (editor === secondary ? closeSplit() : closeTab(activePath)) },
   { id: 'file.closeAll', title: 'View: Close All Editors', run: () => [...openTabs].forEach(closeTab) },
-  { id: 'file.rename', title: 'File: Rename…', when: hasModel, run: () => renameEntry(activePath) },
-  { id: 'file.duplicate', title: 'File: Duplicate', when: hasModel, run: () => duplicate(activePath) },
-  { id: 'file.delete', title: 'File: Delete', when: hasModel, run: () => deleteEntry(activePath) },
-  { id: 'file.download', title: 'File: Download / Share Current File', when: hasModel, run: () => downloadFile(activePath) },
+  { id: 'file.rename', title: 'File: Rename…', when: hasModel, run: () => renameEntry(currentPath()) },
+  { id: 'file.duplicate', title: 'File: Duplicate', when: hasModel, run: () => duplicate(currentPath()) },
+  { id: 'file.delete', title: 'File: Delete', when: hasModel, run: () => deleteEntry(currentPath()) },
+  { id: 'file.download', title: 'File: Download / Share Current File', when: hasModel, run: () => downloadFile(currentPath()) },
+  { id: 'view.split', title: 'View: Split Editor', key: 'Ctrl+\\', run: () => openSplit() },
+  { id: 'view.closeSplit', title: 'View: Close Split Editor', when: () => !!secondary, run: () => closeSplit() },
+  { id: 'view.focusLeft', title: 'View: Focus First Editor Group', key: 'Ctrl+1', run: () => primary.focus() },
+  { id: 'view.focusRight', title: 'View: Focus Second Editor Group', key: 'Ctrl+2', when: () => !!secondary, run: () => secondary.focus() },
+  { id: 'diff.compare', title: 'File: Compare Current File With…', when: hasModel, run: () => pickCompare() },
+  { id: 'diff.compareSplit', title: 'File: Compare the Two Split Editors', when: () => !!secondaryPath && !!activePath, run: () => openDiff(activePath, secondaryPath) },
   { id: 'run.preview', title: 'Run: Run Current File in Sandbox', key: 'F5', run: () => runPreview() },
   { id: 'run.stop', title: 'Run: Stop', key: 'Shift+F5', run: () => stopSandbox('user') },
   { id: 'view.explorer', title: 'View: Show Explorer', run: () => showView('explorer') },
@@ -833,6 +894,9 @@ addEventListener(
       f: mod && e.shiftKey ? 'view.search' : null,
       g: mod && !e.shiftKey ? 'editor.gotoLine' : null,
       ',': mod ? 'pref.settings' : null,
+      '\\': mod ? 'view.split' : null,
+      1: mod && !e.shiftKey ? 'view.focusLeft' : null,
+      2: mod && !e.shiftKey && secondary ? 'view.focusRight' : null,
       f5: e.shiftKey ? 'run.stop' : 'run.preview',
       '`': mod ? 'terminal.toggle' : null,
       f1: 'palette.open',
@@ -1108,6 +1172,15 @@ function openRunSheet(path, mode, title = basename(path)) {
   $('#preview').classList.toggle('pip', mode === 'pip');
   $('#preview').classList.remove('show-console');
   $('#preview').hidden = false;
+  document.body.classList.add('preview-open');
+  // Tablets: if the side bar + preview would squeeze the editor too much, tuck the side bar away.
+  if (wide.matches && drawerOpen && !drawerTucked) {
+    const editorW = $('.main').getBoundingClientRect().width;
+    if (editorW < 460) {
+      drawerTucked = true;
+      setDrawer(false, { remember: false });
+    }
+  }
   $('#stdin').value = stdinByPath.get(path) ?? '';
   sandboxNote();
   clearOutput();
@@ -1147,7 +1220,7 @@ async function compileTypeScript(path, { javascript = false } = {}) {
 let previewPath = null;
 let runToken = 0; // bumped on every run/close so a slow, outdated run start can bail out
 
-async function runPreview(path = activePath) {
+async function runPreview(path = currentPath()) {
   if (!path) return toast('Open a file to run it');
   const runner = RUNNERS[extname(path)];
   if (!runner) return toast('Run works for Python, JavaScript, TypeScript, HTML, Markdown and SVG files');
@@ -1254,6 +1327,11 @@ async function runPreview(path = activePath) {
 }
 
 function closePreview() {
+  document.body.classList.remove('preview-open');
+  if (drawerTucked) {
+    drawerTucked = false;
+    setDrawer(true, { remember: false });
+  }
   runToken++;
   clearSandbox($('#stage'));
   setRunStatus('');
@@ -1512,18 +1590,50 @@ async function resetWorkspace() {
 // Layout: keep the app above the on-screen keyboard; Android back button
 // ---------------------------------------------------------------------------
 
+// Is the on-screen keyboard open? The app is resized when it opens (Android adjustResize and
+// interactive-widget=resizes-content), so compare with the tallest height seen in this orientation.
+let hwKeyboard = false;
+const fullHeight = {};
+function kbOpen() {
+  const h = window.visualViewport?.height ?? innerHeight;
+  const key = innerWidth > innerHeight ? 'landscape' : 'portrait';
+  fullHeight[key] = Math.max(fullHeight[key] || 0, h);
+  return h < fullHeight[key] - 150;
+}
+function setHwKeyboard(on) {
+  if (hwKeyboard === on) return;
+  hwKeyboard = on;
+  document.body.classList.toggle('hw-kb', on);
+  $('#st-kb').hidden = !on || !settings.extraKeys;
+}
 if (window.visualViewport) {
   const vv = window.visualViewport;
   const fit = () => {
     document.documentElement.style.setProperty('--vvh', `${vv.height}px`);
-    document.documentElement.classList.toggle('kb-open', window.innerHeight - vv.height > 120);
+    const open = kbOpen();
+    document.documentElement.classList.toggle('kb-open', open);
+    if (open) setHwKeyboard(false); // typing on the touch keyboard: bring the extra keys back
   };
   vv.addEventListener('resize', fit);
   fit();
 }
+// A physical keyboard sends real key codes; on-screen keyboards mostly send "Unidentified" (229).
+// When one is in use, hide the extra keys bars: Tab, Esc, Ctrl and arrows are on the keyboard.
+addEventListener(
+  'keydown',
+  (e) => {
+    if (!coarse) return;
+    if (e.isComposing || e.keyCode === 229 || e.key === 'Unidentified') return setHwKeyboard(false);
+    if (e.key.length === 1 && !kbOpen()) setHwKeyboard(true);
+  },
+  true,
+);
+$('#st-kb').addEventListener('click', () => setHwKeyboard(false));
+$('#term-kb').addEventListener('click', () => setHwKeyboard(false));
 
 onBackButton(() => {
   if (!$('#dialog').hidden) return closeDialog(false), true;
+  if (!$('#diff').hidden) return closeDiff(), true;
   if (vm?.isOpen && !wide.matches && $('#preview').hidden && $('#palette').hidden && $('#actions').hidden) return vm.close(), true;
   if (!$('#actions').hidden) return closeActions(), true;
   if (!$('#palette').hidden) return closePalette(), true;
@@ -1626,8 +1736,210 @@ function setupTerminal() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Split editor
+// ---------------------------------------------------------------------------
+
+// Sizes the user dragged to (null/0 = automatic: side bar ~30% of the width, preview ~42%).
+const layout = { drawerW: null, termH: 0.42, previewW: 0, split: 0.5, ...store.get('layout', {}) };
+const saveLayout = () => store.set('layout', layout);
+
+function openSplit(path = currentPath() || activePath) {
+  if (!secondary) {
+    secondary = monaco.editor.create($('#editor2'), editorOptions());
+    secondary.onDidFocusEditorText(() => setActiveEditor(secondary));
+    secondary.onDidChangeCursorSelection(() => editor === secondary && updateStatus());
+    secondary.onDidChangeModel(() => renderSplitHead());
+  }
+  $('#pane2').hidden = $('#pane-split').hidden = false;
+  $('#editor-wrap').classList.add('split');
+  document.body.classList.add('has-split');
+  applySplitRatio();
+  setActiveEditor(secondary);
+  if (path && fs.get(path)?.type === 'file') openFile(path, { group: 'secondary', focus: !coarse, keepDrawer: true });
+  else renderSplitHead();
+  persistSession();
+}
+
+function closeSplit() {
+  if (!secondary) return;
+  const focused = editor === secondary;
+  secondary.dispose();
+  secondary = null;
+  secondaryPath = null;
+  $('#pane2').hidden = $('#pane-split').hidden = true;
+  $('#editor-wrap').classList.remove('split');
+  document.body.classList.remove('has-split');
+  applySplitRatio();
+  $('#pane1').classList.remove('active-pane');
+  editor = primary;
+  if (focused && !coarse) primary.focus();
+  updateStatus();
+  persistSession();
+}
+
+function renderSplitHead() {
+  const btn = $('#pane2-file');
+  btn.replaceChildren(
+    ...(secondaryPath
+      ? [fileBadge(secondaryPath), el('span', { className: 'pane-name', textContent: basename(secondaryPath) })]
+      : [el('span', { className: 'pane-name muted-inline', textContent: 'Choose a file' })]),
+    el('span', { className: 'pane-caret', textContent: '▾' }),
+  );
+}
+
+$('#pane2-file').addEventListener('click', () => {
+  const source = (q) =>
+    fs
+      .files()
+      .map((f) => ({ label: basename(f.path), detail: dirname(f.path) === '/' ? '' : dirname(f.path).slice(1), badge: f.path, score: fuzzy(q, f.path), run: () => openFile(f.path, { group: 'secondary' }) }))
+      .filter((i) => i.score >= 0);
+  source.placeholder = 'Open a file on the right side';
+  openPalette('', source);
+});
+
+function applySplitRatio() {
+  if (!secondary) {
+    // Single editor: let it fill the whole area again.
+    $('#pane1').style.flex = $('#pane2').style.flex = '';
+    return;
+  }
+  const r = Math.min(0.85, Math.max(0.15, layout.split));
+  $('#pane1').style.flex = `${r} 1 0`;
+  $('#pane2').style.flex = `${1 - r} 1 0`;
+}
+
+// ---------------------------------------------------------------------------
+// Compare (diff) view
+// ---------------------------------------------------------------------------
+
+let diffEditor = null;
+let diffPair = null;
+let diffSideBySide = null;
+
+function openDiff(a, b) {
+  if (!a || !b) return toast('Pick two files to compare');
+  diffPair = [a, b];
+  $('#diff').hidden = false;
+  diffSideBySide ??= wide.matches;
+  diffEditor ??= monaco.editor.createDiffEditor($('#diff-editor'), {
+    automaticLayout: true,
+    fontSize: settings.fontSize,
+    renderSideBySide: diffSideBySide,
+    originalEditable: true,
+    useInlineViewWhenSpaceIsLimited: true,
+    scrollBeyondLastLine: false,
+    minimap: { enabled: false },
+  });
+  diffEditor.updateOptions({ renderSideBySide: diffSideBySide });
+  diffEditor.setModel({ original: getModel(a), modified: getModel(b) });
+  $('#diff-title').replaceChildren(fileBadge(a), el('span', { textContent: ` ${basename(a)}  ↔  ` }), fileBadge(b), el('span', { textContent: ` ${basename(b)}` }));
+}
+
+function closeDiff() {
+  $('#diff').hidden = true;
+  diffEditor?.setModel(null);
+  diffPair = null;
+}
+
+function pickCompare() {
+  const base = currentPath();
+  const source = (q) =>
+    fs
+      .files()
+      .filter((f) => f.path !== base)
+      .map((f) => ({ label: basename(f.path), detail: dirname(f.path) === '/' ? '' : dirname(f.path).slice(1), badge: f.path, score: fuzzy(q, f.path), run: () => openDiff(base, f.path) }))
+      .filter((i) => i.score >= 0);
+  source.placeholder = `Compare ${basename(base)} with…`;
+  openPalette('', source);
+}
+
+$('#diff-close').addEventListener('click', closeDiff);
+$('#diff-swap').addEventListener('click', () => diffPair && openDiff(diffPair[1], diffPair[0]));
+$('#diff-layout').addEventListener('click', () => {
+  diffSideBySide = !diffSideBySide;
+  diffEditor?.updateOptions({ renderSideBySide: diffSideBySide });
+});
+
+// ---------------------------------------------------------------------------
+// Drag-to-resize dividers (side bar, split editors, terminal, preview) for tablets
+// ---------------------------------------------------------------------------
+
+function splitter(handle, { onDrag, onReset }) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+    const move = (ev) => onDrag(ev);
+    const up = () => {
+      handle.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      saveLayout();
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  });
+  let lastTap = 0;
+  handle.addEventListener('pointerup', () => {
+    if (Date.now() - lastTap < 350) onReset(), saveLayout();
+    lastTap = Date.now();
+  });
+}
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const root = document.documentElement;
+
+function applyLayout() {
+  if (layout.drawerW) root.style.setProperty('--drawer-w-wide', `${clamp(layout.drawerW, 200, Math.max(220, innerWidth * 0.5))}px`);
+  else root.style.removeProperty('--drawer-w-wide');
+  root.style.setProperty('--term-h', `${Math.round(clamp(layout.termH, 0.15, 0.85) * 100)}%`);
+  if (layout.previewW) root.style.setProperty('--preview-w', `${clamp(layout.previewW, 300, innerWidth - 280)}px`);
+  else root.style.removeProperty('--preview-w');
+  applySplitRatio();
+}
+
+splitter($('#drawer-split'), {
+  onDrag: (e) => {
+    layout.drawerW = e.clientX - $('#drawer').getBoundingClientRect().left;
+    applyLayout();
+  },
+  onReset: () => ((layout.drawerW = null), applyLayout()),
+});
+splitter($('#pane-split'), {
+  onDrag: (e) => {
+    const r = $('#editor-wrap').getBoundingClientRect();
+    const stacked = getComputedStyle($('#editor-wrap')).flexDirection === 'column';
+    layout.split = stacked ? (e.clientY - r.top) / r.height : (e.clientX - r.left) / r.width;
+    applySplitRatio();
+  },
+  onReset: () => ((layout.split = 0.5), applySplitRatio()),
+});
+splitter($('#term-split'), {
+  onDrag: (e) => {
+    const main = $('.main').getBoundingClientRect();
+    layout.termH = (main.bottom - e.clientY) / main.height;
+    applyLayout();
+  },
+  onReset: () => ((layout.termH = 0.42), applyLayout()),
+});
+splitter($('#preview-split'), {
+  onDrag: (e) => {
+    layout.previewW = innerWidth - e.clientX;
+    applyLayout();
+  },
+  onReset: () => ((layout.previewW = 0), applyLayout()),
+});
+addEventListener('resize', applyLayout);
+
 async function boot() {
   await fs.init(seed);
+  applyLayout();
   setupTerminal();
   // First launch after this update: show off the new Aero look once.
   if (!settings.aeroIntroduced) {
@@ -1642,8 +1954,10 @@ async function boot() {
   setDrawer(drawerOpen);
   openTabs = session.open.filter((p) => fs.get(p)?.type === 'file');
   const first = openTabs.includes(session.active) ? session.active : openTabs[0] || (fs.get('/README.md') ? '/README.md' : null);
-  if (first) openFile(first, { focus: false });
+  if (first) openFile(first, { focus: false, group: 'primary' });
   else renderAll();
+  if (session.split !== undefined && wide.matches) openSplit(fs.get(session.split || '')?.type === 'file' ? session.split : null);
+  setActiveEditor(primary);
   setSaveStatus();
   document.body.classList.add('ready');
 

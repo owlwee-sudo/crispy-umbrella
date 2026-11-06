@@ -15,6 +15,13 @@ It's an independent project and isn't affiliated with Microsoft or Visual Studio
 - **Run ▶ in a sandbox:** run **Python**, **JavaScript** and **TypeScript** programs, and preview **HTML**, Markdown and SVG. See [Running code](#running-code) below.
 - **Linux terminal 🐧:** a real Linux shell in an x86 PC emulated inside the app (v86). Your workspace is shared with it at `/workspace`. See [Terminal](#terminal-linux-vm) below.
 - **Frutiger Aero theme 🫧:** glassy panels, glossy jelly buttons, and a sky-and-meadow backdrop with drifting bubbles. Dark and Light themes are still in Settings.
+- **Made for tablets too:** from 700 px wide (portrait tablets and up) the side bar docks, the terminal sits under the editor, and Run opens beside your code. You also get:
+  - a **split editor** (Ctrl+\\; side by side in landscape, stacked in portrait)
+  - a **compare / diff view**
+  - **drag-to-resize dividers**: double-tap one to reset it
+  - a larger font and the minimap by default on tablets
+
+  The extra keys hide automatically while a **hardware keyboard** is in use; tap **⌨ Keys** to bring them back.
 - **Autosave:** files are stored on the device (IndexedDB) and your open tabs come back when you reopen the app.
 - **Import/export:** open files or a whole `.zip` project from your phone, and export the workspace as a `.zip` through the Android share sheet.
 - Dark and light themes, plus font size, tab size, word wrap, minimap, and line numbers in Settings.

@@ -41,7 +41,7 @@ export function createTerminal({ panel, getFiles, theme, onVmFile, onVmMkdir, on
     cursorBlink: true,
     convertEol: false,
     fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, 'Roboto Mono', monospace",
-    fontSize: 13,
+    fontSize: Math.min(screen.width, screen.height) >= 600 ? 14 : 13, // a bit larger on tablets
     scrollback: 5000,
     theme: THEMES[theme()] || THEMES.dark,
   });
